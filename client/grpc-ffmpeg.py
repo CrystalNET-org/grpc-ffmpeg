@@ -42,6 +42,10 @@ if __name__ == '__main__':
     # Construct the command using the script name and arguments
     command = [script_name] + sys.argv[1:]
     command_str = ' '.join(command)
-    
+    for arg in sys.argv[1:]:
+        if ' ' in arg:
+            command+= '"{}"  '.format(arg) ;   # Put the quotes back in
+        else:
+            command+="{}  ".format(arg) ;      # Assume no space => no quotes
     # Run the command
     asyncio.run(run_command(command, USE_SSL))
