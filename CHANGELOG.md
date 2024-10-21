@@ -8,6 +8,8 @@
 
 ### Misc
 
+- 🎉 Release 0.0.1 [[#2](https://github.com/CrystalNET-org/grpc-ffmpeg/pull/2)]
+- 🎉 Release 0.0.1 [[#2](https://github.com/CrystalNET-org/grpc-ffmpeg/pull/2)]
 - Update harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-git Docker tag to v2.6.0 [[#4](https://github.com/CrystalNET-org/grpc-ffmpeg/pull/4)]
 - Update harbor.crystalnet.org/dockerhub-proxy/renovate/renovate Docker tag to v37.440.7 [[#3](https://github.com/CrystalNET-org/grpc-ffmpeg/pull/3)]
 - Update harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-git Docker tag to v2.6.0 [[#4](https://github.com/CrystalNET-org/grpc-ffmpeg/pull/4)]
