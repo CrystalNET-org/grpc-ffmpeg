@@ -67,7 +67,7 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         tokens[0] = os.path.join(BINARY_PATH_PREFIX, tokens[0])
 
         # Reconstruct the command
-        command = shlex.join(tokens)
+        sanitized_command = shlex.join(tokens)
 
         process = await asyncio.create_subprocess_shell(
             command,
