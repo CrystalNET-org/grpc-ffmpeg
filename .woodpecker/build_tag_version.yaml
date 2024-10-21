@@ -1,0 +1,26 @@
+clone:
+  git:
+    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-git:2.4.0
+    settings:
+      partial: false
+      depth: 1
+
+steps:
+  docker-build-release:
+    group: build-images
+    image: woodpeckerci/plugin-docker-buildx:2.2.1
+    settings:
+      repo: harbor.crystalnet.org/library/ffmpeg-worker
+      logins:
+      - registry: https://harbor.crystalnet.org/
+        username: robot$library+woodpecker
+        password:
+          from_secret: harbor_token
+      registry: harbor.crystalnet.org
+      auto_tag: true
+      dockerfile: Dockerfile
+      platforms: linux/amd64
+      dry_run: false
+when:
+  branch: ${CI_REPO_DEFAULT_BRANCH}
+  event: tag

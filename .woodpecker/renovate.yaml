@@ -1,0 +1,23 @@
+clone:
+  git:
+    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-git:2.4.0
+    settings:
+      partial: false
+      depth: 1
+
+steps:
+  renovate:
+    image: harbor.crystalnet.org/dockerhub-proxy/renovate/renovate:37.140.10
+    secrets: 
+      - github_com_token
+      - renovate_token
+    environment:
+      - RENOVATE_CONFIG_FILE=.woodpecker/renovate_config.json
+      - RENOVATE_DRY_RUN=false
+      - RENOVATE_ENDPOINT=https://api.github.com
+      - SHELL=/bin/bash
+    commands:
+      - LOG_LEVEL=debug renovate --platform github --git-author "Renovate <renovate@local.bot>" --ignore-pr-author true
+when:
+  event: [cron, manual]
+  branch: main

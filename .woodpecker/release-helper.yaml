@@ -1,0 +1,16 @@
+steps:
+  release-helper:
+    image: harbor.crystalnet.org/library/plugin-ready-release-helm:1.0.3
+    pull: true
+    settings:
+      release_branch: ${CI_REPO_DEFAULT_BRANCH}
+      forge_type: github
+      git_email: woodpecker-bot@crystalnet.org
+      github_token:
+        from_secret: GITHUB_TOKEN
+
+when:
+  - event: push
+    branch: ${CI_REPO_DEFAULT_BRANCH}
+  - event: manual
+    branch: ${CI_REPO_DEFAULT_BRANCH}
