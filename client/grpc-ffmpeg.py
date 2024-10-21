@@ -44,4 +44,4 @@ if __name__ == '__main__':
     command_str = ' '.join(command)
     
     # Run the command
-    asyncio.run(run_command(command_str, USE_SSL))
+    asyncio.run(run_command(command, USE_SSL))
