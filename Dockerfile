@@ -27,6 +27,7 @@ FROM debian:bookworm-slim
 RUN sed -i 's/Components: main/Components: main contrib non-free/' /etc/apt/sources.list.d/debian.sources
 
 # Define the ARG for the jellyfin-ffmpeg version
+# renovate: datasource=github-releases depName=jellyfin/jellyfin-ffmpeg versioning=loose
 ARG JELLYFIN_FFMPEG_VERSION=6.0.1-7
 
 RUN apt-get update && apt-get install -y \
