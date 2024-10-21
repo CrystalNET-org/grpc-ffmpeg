@@ -28,7 +28,7 @@ RUN sed -i 's/Components: main/Components: main contrib non-free/' /etc/apt/sour
 
 # Define the ARG for the jellyfin-ffmpeg version
 # renovate: datasource=github-releases depName=jellyfin/jellyfin-ffmpeg versioning=loose
-ARG JELLYFIN_FFMPEG_VERSION=6.0.1-7
+ARG JELLYFIN_FFMPEG_VERSION=6.0.1-8
 
 RUN apt-get update && apt-get install -y \
     libssl3 \
