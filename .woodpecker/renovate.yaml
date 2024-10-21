@@ -7,7 +7,7 @@ clone:
 
 steps:
   renovate:
-    image: harbor.crystalnet.org/dockerhub-proxy/renovate/renovate:37.140.10
+    image: harbor.crystalnet.org/dockerhub-proxy/renovate/renovate:37.440.7
     secrets: 
       - github_com_token
       - renovate_token
