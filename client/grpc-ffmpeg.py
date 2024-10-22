@@ -75,7 +75,17 @@ def handle_quoted_arguments(command_args):
             rffmpeg_command.append(arg)
             rffmpeg_command.append(filter_complex_arg)
             i += 2  # Skip the next argument as it's part of -filter_complex
-        
+        elif arg == '-vf' and i + 1 < len(command_args):
+            vf_arg = command_args[i + 1]
+
+            # Quote the filter complex string if it contains spaces, commas, or colons
+            if ' ' in vf_arg or ',' in vf_arg or ':' in vf_arg:
+                vf_arg = f'"{vf_arg}"'
+
+            # Reassemble the -filter_complex argument
+            rffmpeg_command.append(arg)
+            rffmpeg_command.append(vf_arg)
+            i += 2  # Skip the next argument as it's part of -vf
         # Append any other arguments as is
         else:
             rffmpeg_command.append(arg)
