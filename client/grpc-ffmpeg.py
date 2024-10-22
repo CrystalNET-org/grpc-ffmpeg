@@ -94,18 +94,16 @@ def handle_quoted_arguments(command_args):
     return rffmpeg_command
 
 if __name__ == '__main__':
+    script_name = os.path.basename(sys.argv[0])
     # Get the command line arguments
     command_args = sys.argv[1:]
 
     # Process and reassemble the arguments
     rffmpeg_command = handle_quoted_arguments(command_args)
 
-    # Print the constructed command for debugging
-    #print(rffmpeg_command)
-
+    command = [script_name] + rffmpeg_command
     # Convert the list to a single command string
-    command_str = sys.argv[0].join(rffmpeg_command)
-    #print(command_str)
+    command_str = ' '.join(command)
 
     # Run the command
     asyncio.run(run_command(command_str, USE_SSL))
