@@ -1,4 +1,6 @@
+ARG PROTOC_VERSION=28.2
 FROM debian:bookworm-slim AS builder
+ARG PROTOC_VERSION
 
 # Setzen der Arbeitsverzeichnis im Container
 WORKDIR /app
@@ -7,8 +9,10 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
-    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
+
+RUN curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip && \
+    unzip protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /app/.local
 
 # Upgrade pip
 RUN pip3 install --break-system-packages --upgrade pip
@@ -18,7 +22,7 @@ COPY proto/ffmpeg.proto .
 
 # Kompilieren der .proto-Datei für Python
 RUN python3 -m pip install --break-system-packages grpcio grpcio-tools 
-RUN python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. ffmpeg.proto
+RUN PATH="$PATH:$HOME/app/.local/bin" python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. ffmpeg.proto
 
 # Final stage
 FROM debian:bookworm-slim

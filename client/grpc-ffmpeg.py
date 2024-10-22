@@ -82,10 +82,21 @@ def handle_quoted_arguments(command_args):
             if ' ' in vf_arg or ',' in vf_arg or ':' in vf_arg:
                 vf_arg = f'"{vf_arg}"'
 
-            # Reassemble the -filter_complex argument
+            # Reassemble the -vf argument
             rffmpeg_command.append(arg)
             rffmpeg_command.append(vf_arg)
             i += 2  # Skip the next argument as it's part of -vf
+        elif arg == '-hls_segment_filename' and i + 1 < len(command_args):
+            hls_segment_filename_arg = command_args[i + 1]
+
+            # Quote the filter complex string if it contains spaces, commas, or colons
+            if ' ' in hls_segment_filename_arg or ',' in hls_segment_filename_arg or ':' in hls_segment_filename_arg:
+                hls_segment_filename_arg = f'"{hls_segment_filename_arg}"'
+
+            # Reassemble the -hls_segment_filename argument
+            rffmpeg_command.append(arg)
+            rffmpeg_command.append(hls_segment_filename_arg)
+            i += 2  # Skip the next argument as it's part of -hls_segment_filename
         # Append any other arguments as is
         else:
             rffmpeg_command.append(arg)
