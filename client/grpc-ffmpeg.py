@@ -101,11 +101,11 @@ if __name__ == '__main__':
     rffmpeg_command = handle_quoted_arguments(command_args)
 
     # Print the constructed command for debugging
-    print(rffmpeg_command)
+    #print(rffmpeg_command)
 
     # Convert the list to a single command string
-    command_str = ' '.join(rffmpeg_command)
-    print(command_str)
+    command_str = sys.argv[0].join(rffmpeg_command)
+    #print(command_str)
 
     # Run the command
     asyncio.run(run_command(command_str, USE_SSL))
