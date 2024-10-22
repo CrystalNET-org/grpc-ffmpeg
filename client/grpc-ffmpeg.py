@@ -97,6 +97,17 @@ def handle_quoted_arguments(command_args):
             rffmpeg_command.append(arg)
             rffmpeg_command.append(hls_segment_filename_arg)
             i += 2  # Skip the next argument as it's part of -hls_segment_filename
+        elif arg == '-user_agent' and i + 1 < len(command_args):
+            user_agent_arg = command_args[i + 1]
+
+            # Quote the filter complex string if it contains spaces, commas, or colons
+            if ' ' in user_agent_arg or ',' in user_agent_arg or ':' in user_agent_arg:
+                user_agent_arg = f'"{user_agent_arg}"'
+
+            # Reassemble the -user_agent_arg argument
+            rffmpeg_command.append(arg)
+            rffmpeg_command.append(user_agent_arg)
+            i += 2  # Skip the next argument as it's part of -user_agent_arg
         # Append any other arguments as is
         else:
             rffmpeg_command.append(arg)
