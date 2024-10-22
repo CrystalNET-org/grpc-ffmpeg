@@ -7,7 +7,6 @@ clone:
 
 steps:
   docker-build-dev:
-    group: build-images
     image: woodpeckerci/plugin-docker-buildx:2.2.1
     settings:
       debug: true
