@@ -37,20 +37,65 @@ async def run_command(command, use_ssl):
             if response.exit_code != 0:
                 print(f"\nExit code: {response.exit_code}")
 
+def handle_quoted_arguments(command_args):
+    """
+    Handles the quoting and reassembly of specific arguments like -i file: and -filter_complex.
+    - Quotes the file path for the -i file: argument if it contains spaces or special characters.
+    - Quotes the entire filter complex string if it contains spaces, commas, or colons.
+    """
+    rffmpeg_command = []
+    i = 0
+
+    while i < len(command_args):
+        arg = command_args[i]
+
+        # Handle -i file: argument
+        if arg == '-i' and i + 1 < len(command_args) and command_args[i + 1].startswith('file:'):
+            file_path_arg = command_args[i + 1]
+            file_path = file_path_arg[len('file:'):]  # Extract the actual file path
+
+            # Quote the file path if it contains spaces or special characters
+            if ' ' in file_path or '(' in file_path or ')' in file_path:
+                file_path = f'"{file_path}"'
+
+            # Reassemble the -i file: argument
+            rffmpeg_command.append(arg)
+            rffmpeg_command.append(f'file:{file_path}')
+            i += 2  # Skip the next argument as it's part of -i file:
+        
+        # Handle -filter_complex argument
+        elif arg == '-filter_complex' and i + 1 < len(command_args):
+            filter_complex_arg = command_args[i + 1]
+
+            # Quote the filter complex string if it contains spaces, commas, or colons
+            if ' ' in filter_complex_arg or ',' in filter_complex_arg or ':' in filter_complex_arg:
+                filter_complex_arg = f'"{filter_complex_arg}"'
+
+            # Reassemble the -filter_complex argument
+            rffmpeg_command.append(arg)
+            rffmpeg_command.append(filter_complex_arg)
+            i += 2  # Skip the next argument as it's part of -filter_complex
+        
+        # Append any other arguments as is
+        else:
+            rffmpeg_command.append(arg)
+            i += 1
+
+    return rffmpeg_command
 
 if __name__ == '__main__':
-    # Determine the name the script was called with
-    script_name = os.path.basename(sys.argv[0])
-    
-    # Capture the arguments as a list
-    command = shlex.join(sys.argv[0:])
-    
-    # Use shlex to reassemble the command string with appropriate quoting
-    #command_str = shlex.join(command)  # shlex.join preserves necessary quotes
-    
-    # Print the command list and the reassembled command string
-    print(command)
-    #print(command_str)
+    # Get the command line arguments
+    command_args = sys.argv[1:]
+
+    # Process and reassemble the arguments
+    rffmpeg_command = handle_quoted_arguments(command_args)
+
+    # Print the constructed command for debugging
+    print(rffmpeg_command)
+
+    # Convert the list to a single command string
+    command_str = ' '.join(rffmpeg_command)
+    print(command_str)
 
     # Run the command
     asyncio.run(run_command(command_str, USE_SSL))
