@@ -5,6 +5,7 @@ import ffmpeg_pb2_grpc
 import asyncio
 import os
 import sys
+import shlex
 
 # Configuration
 CERTIFICATE_PATH = os.getenv('CERTIFICATE_PATH', 'server.crt')
@@ -36,16 +37,20 @@ async def run_command(command, use_ssl):
             if response.exit_code != 0:
                 print(f"\nExit code: {response.exit_code}")
 
+
 if __name__ == '__main__':
     # Determine the name the script was called with
     script_name = os.path.basename(sys.argv[0])
-    # Construct the command using the script name and arguments
-    command = [script_name] + sys.argv[1:]
-    command_str = ' '.join(command)
-    for arg in sys.argv[1:]:
-        if ' ' in arg:
-            command+= '"{}"  '.format(arg) ;   # Put the quotes back in
-        else:
-            command+="{}  ".format(arg) ;      # Assume no space => no quotes
+    
+    # Capture the arguments as a list
+    command = shlex.join(sys.argv[0:])
+    
+    # Use shlex to reassemble the command string with appropriate quoting
+    #command_str = shlex.join(command)  # shlex.join preserves necessary quotes
+    
+    # Print the command list and the reassembled command string
+    print(command)
+    #print(command_str)
+
     # Run the command
-    asyncio.run(run_command(command, USE_SSL))
+    asyncio.run(run_command(command_str, USE_SSL))
