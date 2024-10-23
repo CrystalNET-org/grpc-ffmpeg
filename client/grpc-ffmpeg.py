@@ -5,7 +5,6 @@ import ffmpeg_pb2_grpc
 import asyncio
 import os
 import sys
-import shlex
 
 # Configuration
 CERTIFICATE_PATH = os.getenv('CERTIFICATE_PATH', 'server.crt')
@@ -13,7 +12,7 @@ AUTH_TOKEN = os.getenv('AUTH_TOKEN', 'my_secret_token1')
 GRPC_HOST = os.getenv('GRPC_HOST', 'ffmpeg-workers')
 GRPC_PORT = os.getenv('GRPC_PORT', '50051')
 USE_SSL = os.getenv('USE_SSL', 'false').lower() == 'true'
-# Add any params here that need quoting on theyre values
+# Add any params here that need quoting on their values
 parameters_to_quote = ['-filter_complex', '-vf', '-hls_segment_filename', '-user_agent']
 
 async def run_command(command, use_ssl):
