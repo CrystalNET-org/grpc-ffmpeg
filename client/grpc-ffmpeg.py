@@ -13,6 +13,8 @@ AUTH_TOKEN = os.getenv('AUTH_TOKEN', 'my_secret_token1')
 GRPC_HOST = os.getenv('GRPC_HOST', 'ffmpeg-workers')
 GRPC_PORT = os.getenv('GRPC_PORT', '50051')
 USE_SSL = os.getenv('USE_SSL', 'false').lower() == 'true'
+# Add any params here that need quoting on theyre values
+parameters_to_quote = ['-filter_complex', '-vf', '-hls_segment_filename', '-user_agent']
 
 async def run_command(command, use_ssl):
     target = f"{GRPC_HOST}:{GRPC_PORT}"
@@ -49,7 +51,7 @@ def handle_quoted_arguments(command_args):
     while i < len(command_args):
         arg = command_args[i]
 
-        # Handle -i file: argument
+        # Handle -i file: argument separately
         if arg == '-i' and i + 1 < len(command_args) and command_args[i + 1].startswith('file:'):
             file_path_arg = command_args[i + 1]
             file_path = file_path_arg[len('file:'):]  # Extract the actual file path
@@ -62,58 +64,26 @@ def handle_quoted_arguments(command_args):
             rffmpeg_command.append(arg)
             rffmpeg_command.append(f'file:{file_path}')
             i += 2  # Skip the next argument as it's part of -i file:
-        
-        # Handle -filter_complex argument
-        elif arg == '-filter_complex' and i + 1 < len(command_args):
-            filter_complex_arg = command_args[i + 1]
 
-            # Quote the filter complex string if it contains spaces, commas, or colons
-            if ' ' in filter_complex_arg or ',' in filter_complex_arg or ':' in filter_complex_arg:
-                filter_complex_arg = f'"{filter_complex_arg}"'
+        # Handle arguments in the parameters_to_quote list
+        elif arg in parameters_to_quote and i + 1 < len(command_args):
+            next_arg = command_args[i + 1]
 
-            # Reassemble the -filter_complex argument
+            # Quote the argument value if it contains spaces, commas, or colons
+            if ' ' in next_arg or ',' in next_arg or ':' in next_arg:
+                next_arg = f'"{next_arg}"'
+
             rffmpeg_command.append(arg)
-            rffmpeg_command.append(filter_complex_arg)
-            i += 2  # Skip the next argument as it's part of -filter_complex
-        elif arg == '-vf' and i + 1 < len(command_args):
-            vf_arg = command_args[i + 1]
+            rffmpeg_command.append(next_arg)
+            i += 2  # Skip the next argument as it's part of this argument set
 
-            # Quote the filter complex string if it contains spaces, commas, or colons
-            if ' ' in vf_arg or ',' in vf_arg or ':' in vf_arg:
-                vf_arg = f'"{vf_arg}"'
-
-            # Reassemble the -vf argument
-            rffmpeg_command.append(arg)
-            rffmpeg_command.append(vf_arg)
-            i += 2  # Skip the next argument as it's part of -vf
-        elif arg == '-hls_segment_filename' and i + 1 < len(command_args):
-            hls_segment_filename_arg = command_args[i + 1]
-
-            # Quote the filter complex string if it contains spaces, commas, or colons
-            if ' ' in hls_segment_filename_arg or ',' in hls_segment_filename_arg or ':' in hls_segment_filename_arg:
-                hls_segment_filename_arg = f'"{hls_segment_filename_arg}"'
-
-            # Reassemble the -hls_segment_filename argument
-            rffmpeg_command.append(arg)
-            rffmpeg_command.append(hls_segment_filename_arg)
-            i += 2  # Skip the next argument as it's part of -hls_segment_filename
-        elif arg == '-user_agent' and i + 1 < len(command_args):
-            user_agent_arg = command_args[i + 1]
-
-            # Quote the filter complex string if it contains spaces, commas, or colons
-            if ' ' in user_agent_arg or ',' in user_agent_arg or ':' in user_agent_arg:
-                user_agent_arg = f'"{user_agent_arg}"'
-
-            # Reassemble the -user_agent_arg argument
-            rffmpeg_command.append(arg)
-            rffmpeg_command.append(user_agent_arg)
-            i += 2  # Skip the next argument as it's part of -user_agent_arg
         # Append any other arguments as is
         else:
             rffmpeg_command.append(arg)
             i += 1
 
     return rffmpeg_command
+
 
 if __name__ == '__main__':
     script_name = os.path.basename(sys.argv[0])
