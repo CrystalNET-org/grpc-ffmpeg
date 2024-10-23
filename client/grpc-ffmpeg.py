@@ -56,7 +56,7 @@ def handle_quoted_arguments(command_args):
             file_path = file_path_arg[len('file:'):]  # Extract the actual file path
 
             # Quote the file path if it contains spaces or special characters
-            if ' ' in file_path or '(' in file_path or ')' in file_path:
+            if any(char in next_arg for char in [' ', ',', ':', '(', ')']):
                 file_path = f'"{file_path}"'
 
             # Reassemble the -i file: argument
@@ -69,7 +69,7 @@ def handle_quoted_arguments(command_args):
             next_arg = command_args[i + 1]
 
             # Quote the argument value if it contains spaces, commas, or colons
-            if ' ' in next_arg or ',' in next_arg or ':' in next_arg:
+            if any(char in next_arg for char in [' ', ',', ':', '(', ')']):
                 next_arg = f'"{next_arg}"'
 
             rffmpeg_command.append(arg)
