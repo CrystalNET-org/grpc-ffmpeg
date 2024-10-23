@@ -2,11 +2,11 @@ ARG PROTOC_VERSION=28.2
 FROM debian:bookworm-slim AS builder
 ARG PROTOC_VERSION
 
-# Setzen der Arbeitsverzeichnis im Container
+# set our working directory within the build context
 WORKDIR /app
 
-# Installieren von notwendigen Paketen
-RUN apt-get update && apt-get install -y \
+# install needed build-time dependencies
+RUN apt-get update && apt-get install --no-install-recommends -y \
     curl \
     unzip \
     python3 \
@@ -16,13 +16,13 @@ RUN apt-get update && apt-get install -y \
 RUN curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip && \
     unzip protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /app/.local
 
-# Upgrade pip
+# Upgrade pip (we throw away the build context anyways, so we are fine with breaking our system ^^)
 RUN pip3 install --break-system-packages --upgrade pip
 
-# Kopieren der Protobuf-Definition in das Arbeitsverzeichnis im Container
+# move our protobuf definition file into our context
 COPY proto/ffmpeg.proto .
 
-# Kompilieren der .proto-Datei für Python
+# compile the .proto-file for later use from within python
 RUN python3 -m pip install --break-system-packages grpcio grpcio-tools 
 RUN PATH="$PATH:$HOME/app/.local/bin" python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. ffmpeg.proto
 
@@ -36,7 +36,8 @@ RUN sed -i 's/Components: main/Components: main contrib non-free/' /etc/apt/sour
 # renovate: datasource=github-releases depName=jellyfin/jellyfin-ffmpeg versioning=loose
 ARG JELLYFIN_FFMPEG_VERSION=6.0.1-8
 
-RUN apt-get update && apt-get install -y \
+# Install packages that are needed for the runtime environment
+RUN apt-get update && apt-get install --no-install-recommends -y \
     libssl3 \
     libc-bin \
     ca-certificates \
@@ -58,10 +59,12 @@ RUN apt-get update && apt-get install -y \
     libx265-199 \
     libzvbi0
 
+# setup python specific environment
 COPY requirements.txt /app/
 RUN pip3 install --break-system-packages --upgrade pip
 RUN python3 -m pip install --break-system-packages -r /app/requirements.txt
 
+# Download and install jellifin's fork of ffmpeg which comes with additional codecs and improved hw accelleration routines
 RUN wget https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JELLYFIN_FFMPEG_VERSION}/jellyfin-ffmpeg6_${JELLYFIN_FFMPEG_VERSION}-bookworm_amd64.deb && \
     dpkg -i jellyfin-ffmpeg6_${JELLYFIN_FFMPEG_VERSION}-bookworm_amd64.deb && \
     apt-get install -f && \
