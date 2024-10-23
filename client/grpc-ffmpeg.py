@@ -14,6 +14,7 @@ GRPC_PORT = os.getenv('GRPC_PORT', '50051')
 USE_SSL = os.getenv('USE_SSL', 'false').lower() == 'true'
 # Add any params here that need quoting on their values
 parameters_to_quote = ['-filter_complex', '-vf', '-hls_segment_filename', '-user_agent']
+chars_that_need_quoting = [' ', ',', ':', '(', ')']
 
 async def run_command(command, use_ssl):
     target = f"{GRPC_HOST}:{GRPC_PORT}"
@@ -56,7 +57,7 @@ def handle_quoted_arguments(command_args):
             file_path = file_path_arg[len('file:'):]  # Extract the actual file path
 
             # Quote the file path if it contains spaces or special characters
-            if any(char in next_arg for char in [' ', ',', ':', '(', ')']):
+            if any(char in next_arg for char in chars_that_need_quoting):
                 file_path = f'"{file_path}"'
 
             # Reassemble the -i file: argument
@@ -69,7 +70,7 @@ def handle_quoted_arguments(command_args):
             next_arg = command_args[i + 1]
 
             # Quote the argument value if it contains spaces, commas, or colons
-            if any(char in next_arg for char in [' ', ',', ':', '(', ')']):
+            if any(char in next_arg for char in chars_that_need_quoting):
                 next_arg = f'"{next_arg}"'
 
             rffmpeg_command.append(arg)
