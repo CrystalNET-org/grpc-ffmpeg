@@ -65,7 +65,7 @@ RUN pip3 install --break-system-packages --upgrade pip
 RUN python3 -m pip install --break-system-packages -r /app/requirements.txt
 
 # Download and install jellifin's fork of ffmpeg which comes with additional codecs and improved hw accelleration routines
-RUN wget https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JELLYFIN_FFMPEG_VERSION}/jellyfin-ffmpeg6_${JELLYFIN_FFMPEG_VERSION}-bookworm_amd64.deb && \
+RUN wget https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JELLYFIN_FFMPEG_VERSION}/jellyfin-ffmpeg7_${JELLYFIN_FFMPEG_VERSION}-bookworm_amd64.deb && \
     dpkg -i jellyfin-ffmpeg6_${JELLYFIN_FFMPEG_VERSION}-bookworm_amd64.deb && \
     apt-get install -f && \
     rm jellyfin-ffmpeg6_${JELLYFIN_FFMPEG_VERSION}-bookworm_amd64.deb
