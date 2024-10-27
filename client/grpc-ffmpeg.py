@@ -57,7 +57,7 @@ def handle_quoted_arguments(command_args):
             file_path = file_path_arg[len('file:'):]  # Extract the actual file path
 
             # Quote the file path if it contains spaces or special characters
-            if any(char in next_arg for char in chars_that_need_quoting):
+            if any(char in file_path for char in chars_that_need_quoting):
                 file_path = f'"{file_path}"'
 
             # Reassemble the -i file: argument
