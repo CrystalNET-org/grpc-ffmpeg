@@ -7,7 +7,7 @@ clone:
 
 steps:
   docker-build-release:
-    image: woodpeckerci/plugin-docker-buildx:2.2.1
+    image: woodpeckerci/plugin-docker-buildx:2.3.0
     settings:
       repo: harbor.crystalnet.org/library/ffmpeg-worker
       logins:
