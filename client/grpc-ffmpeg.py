@@ -12,6 +12,8 @@ AUTH_TOKEN = os.getenv('AUTH_TOKEN', 'my_secret_token1')
 GRPC_HOST = os.getenv('GRPC_HOST', 'ffmpeg-workers')
 GRPC_PORT = os.getenv('GRPC_PORT', '50051')
 USE_SSL = os.getenv('USE_SSL', 'false').lower() == 'true'
+# Add any params here that need quoting on their values
+parameters_to_quote = ['-filter_complex', '-vf', '-hls_segment_filename', '-user_agent']
 
 async def run_command(command, use_ssl):
     target = f"{GRPC_HOST}:{GRPC_PORT}"
@@ -36,12 +38,64 @@ async def run_command(command, use_ssl):
             if response.exit_code != 0:
                 print(f"\nExit code: {response.exit_code}")
 
+def handle_quoted_arguments(command_args):
+    """
+    Handles the quoting and reassembly of specific arguments like -i file: and -filter_complex.
+    - Quotes the file path for the -i file: argument if it contains spaces or special characters.
+    - Quotes the entire filter complex string if it contains spaces, commas, or colons.
+    """
+    chars_that_need_quoting = [' ', ',', ':', '(', ')']
+    rffmpeg_command = []
+    i = 0
+
+    while i < len(command_args):
+        arg = command_args[i]
+
+        # Handle -i file: argument separately
+        if arg == '-i' and i + 1 < len(command_args) and command_args[i + 1].startswith('file:'):
+            file_path_arg = command_args[i + 1]
+            file_path = file_path_arg[len('file:'):]  # Extract the actual file path
+
+            # Quote the file path if it contains spaces or special characters
+            if any(char in next_arg for char in chars_that_need_quoting):
+                file_path = f'"{file_path}"'
+
+            # Reassemble the -i file: argument
+            rffmpeg_command.append(arg)
+            rffmpeg_command.append(f'file:{file_path}')
+            i += 2  # Skip the next argument as it's part of -i file:
+
+        # Handle arguments in the parameters_to_quote list
+        elif arg in parameters_to_quote and i + 1 < len(command_args):
+            next_arg = command_args[i + 1]
+
+            # Quote the argument value if it contains spaces, commas, or colons
+            if any(char in next_arg for char in chars_that_need_quoting):
+                next_arg = f'"{next_arg}"'
+
+            rffmpeg_command.append(arg)
+            rffmpeg_command.append(next_arg)
+            i += 2  # Skip the next argument as it's part of this argument set
+
+        # Append any other arguments as is
+        else:
+            rffmpeg_command.append(arg)
+            i += 1
+
+    return rffmpeg_command
+
+
 if __name__ == '__main__':
-    # Determine the name the script was called with
     script_name = os.path.basename(sys.argv[0])
-    # Construct the command using the script name and arguments
-    command = [script_name] + sys.argv[1:]
+    # Get the command line arguments
+    command_args = sys.argv[1:]
+
+    # Process and reassemble the arguments
+    rffmpeg_command = handle_quoted_arguments(command_args)
+
+    command = [script_name] + rffmpeg_command
+    # Convert the list to a single command string
     command_str = ' '.join(command)
-    
+
     # Run the command
-    asyncio.run(run_command(command, USE_SSL))
+    asyncio.run(run_command(command_str, USE_SSL))
