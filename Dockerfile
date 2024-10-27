@@ -57,7 +57,11 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
     libwebpmux3 \
     libx264-164 \
     libx265-199 \
-    libzvbi0
+    libzvbi0 \
+    libopus0 \
+    libtheora0 \
+    libvorbisenc2
+
 
 # setup python specific environment
 COPY requirements.txt /app/
