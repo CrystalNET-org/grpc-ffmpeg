@@ -34,7 +34,7 @@ Shared tmp directories between the client and worker containers (for jellyfin th
 #### 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/grpc-ffmpeg.git
+git clone https://github.com/CrystalNET-org/grpc-ffmpeg.git
 cd grpc-ffmpeg
 ```
 
