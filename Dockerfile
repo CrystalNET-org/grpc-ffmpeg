@@ -93,5 +93,9 @@ ENV LIBVA_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
 
+LABEL org.opencontainers.image.source=https://github.com/CrystalNET-org/grpc-ffmpeg
+LABEL org.opencontainers.image.description="ffmpeg-worker"
+LABEL org.opencontainers.image.licenses=Apache2.0
+
 # Run the binary
 CMD ["/app/grpc-ffmpeg.py"]
