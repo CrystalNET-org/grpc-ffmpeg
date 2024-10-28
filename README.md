@@ -27,13 +27,15 @@ This project provides a gRPC-based service for executing FFmpeg commands. It con
 - Python 3.6+
 - Docker
 
+Shared tmp directories between the client and worker containers (for jellyfin this would be the cache directory)
+
 ### Building the Project
 
 #### 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/grpc-ffmpeg-service.git
-cd grpc-ffmpeg-service
+git clone https://github.com/yourusername/grpc-ffmpeg.git
+cd grpc-ffmpeg
 ```
 
 #### 2. Install Python dependencies:
@@ -101,6 +103,7 @@ Start the server with SSL:
 export USE_SSL=true
 export SSL_KEY_PATH=/path/to/server.key
 export SSL_CERT_PATH=/path/to/server.crt
+export VALID_TOKEN=my_secret_token1
 python server/grpc-ffmpeg.py
 ```
 
