@@ -9,7 +9,7 @@ steps:
   docker-build-release:
     image: woodpeckerci/plugin-docker-buildx:2.3.0
     settings:
-      repo: harbor.crystalnet.org/library/ffmpeg-worker,ghcr.io/CrystalNET-org/ffmpeg-worker
+      repo: harbor.crystalnet.org/library/ffmpeg-worker,ghcr.io/crystalnet-org/ffmpeg-worker
       logins:
       - registry: https://harbor.crystalnet.org/
         username: robot$library+woodpecker
