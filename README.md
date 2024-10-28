@@ -117,14 +117,11 @@ python client/grpc-ffmpeg.py "ffmpeg -i input.mp4 output.mp4"
 
 ### License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-### Contributing
-
-Please read [CONTRIBUTING.md](CONTRIBUTING.md) for details on our code of conduct, and the process for submitting pull requests.
+This project is licensed under the Apache 2.0 License - see the [LICENSE](LICENSE) file for details.
 
 ### Acknowledgements
 
+- [rFFmpeg](https://github.com/joshuaboniface/rffmpeg)
 - [FFmpeg](https://ffmpeg.org/)
 - [gRPC](https://grpc.io/)
 - [Protobuf](https://developers.google.com/protocol-buffers)
