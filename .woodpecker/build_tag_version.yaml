@@ -15,8 +15,8 @@ steps:
         username: robot$library+woodpecker
         password:
           from_secret: harbor_token
-      - registry: https://harbor.crystalnet.org/
-        username: robot$library+woodpecker
+      - registry: https://ghcr.io/
+        username: psych0d0g
         password:
           from_secret: GITHUB_TOKEN
       registry: harbor.crystalnet.org
