@@ -1,6 +1,6 @@
 ARG PROTOC_VERSION=28.2
 # renovate: datasource=github-releases depName=jellyfin/jellyfin-ffmpeg versioning=loose
-ARG JELLYFIN_FFMPEG_VERSION=7.0.2-5
+ARG JELLYFIN_FFMPEG_VERSION=7.0.2-7
 
 FROM debian:bookworm-slim AS builder
 ARG PROTOC_VERSION
