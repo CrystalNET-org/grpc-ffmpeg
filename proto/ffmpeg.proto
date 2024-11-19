@@ -13,5 +13,5 @@ message CommandRequest {
 message CommandResponse {
   string output = 1;
   int32 exit_code = 2;
-  string stream = 3; // Added field to indicate stream type
+  string stream = 3; // "stdout", "stderr", or "exit_code"
 }

@@ -29,18 +29,20 @@ async def run_command(command, use_ssl):
     else:
         channel = grpc.aio.insecure_channel(target)
 
+    exit_code = 0  # Default exit code
+
     async with channel:
         stub = ffmpeg_pb2_grpc.FFmpegServiceStub(channel)
         request = ffmpeg_pb2.CommandRequest(command=command)
         async for response in stub.ExecuteCommand(request):
-            if response.output:
-                if response.stream:
-                    if response.stream == "STDOUT":
-                        sys.stdout.write(f"{response.output}\n")  # Write to stdout
-                    else:
-                        sys.stderr.write(f"{response.stream}: {response.output}\n")  # Write to stderr with prefix
-                else:
-                    print(response.output, end="")
+            if response.output_type == "stdout":
+                sys.stdout.write(f"{response.output}")
+            elif response.output_type == "stderr":
+                sys.stderr.write(f"{response.output}")
+            elif response.output_type == "exit_code":
+                exit_code = response.exit_code
+
+    return exit_code
 
 def handle_quoted_arguments(command_args):
     """
@@ -101,5 +103,6 @@ if __name__ == '__main__':
     # Convert the list to a single command string
     command_str = ' '.join(command)
 
-    # Run the command
-    asyncio.run(run_command(command_str, USE_SSL))
+    # Run the command and handle exit code
+    exit_code = asyncio.run(run_command(command_str, USE_SSL))
+    sys.exit(exit_code)
