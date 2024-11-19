@@ -91,7 +91,7 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
 
         await process.wait()
         exit_code = process.returncode
-        yield ffmpeg_pb2.CommandResponse(exit_code=exit_code, stream_name="exit_code")
+        yield ffmpeg_pb2.CommandResponse(exit_code=exit_code, stream="exit_code")
 
     async def health_check(self):
         logger.info("Running initial health check...")
