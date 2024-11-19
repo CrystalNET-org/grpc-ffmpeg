@@ -34,9 +34,13 @@ async def run_command(command, use_ssl):
         request = ffmpeg_pb2.CommandRequest(command=command)
         async for response in stub.ExecuteCommand(request):
             if response.output:
-                print(response.output, end="")
-            if response.exit_code != 0:
-                print(f"\nExit code: {response.exit_code}")
+                if response.stream:
+                    if response.stream == "STDOUT":
+                        sys.stdout.write(f"{response.output}\n")  # Write to stdout
+                    else:
+                        sys.stderr.write(f"{response.stream}: {response.output}\n")  # Write to stderr with prefix
+                else:
+                    print(response.output, end="")
 
 def handle_quoted_arguments(command_args):
     """

@@ -1,6 +1,10 @@
 ARG PROTOC_VERSION=28.2
+# renovate: datasource=github-releases depName=jellyfin/jellyfin-ffmpeg versioning=loose
+ARG JELLYFIN_FFMPEG_VERSION=7.0.2-5
+
 FROM debian:bookworm-slim AS builder
 ARG PROTOC_VERSION
+ARG JELLYFIN_FFMPEG_VERSION
 
 # set our working directory within the build context
 WORKDIR /app
@@ -28,13 +32,10 @@ RUN PATH="$PATH:$HOME/app/.local/bin" python3 -m grpc_tools.protoc -I. --python_
 
 # Final stage
 FROM debian:bookworm-slim
+ARG JELLYFIN_FFMPEG_VERSION
 
 # Enable non-free repositories
 RUN sed -i 's/Components: main/Components: main contrib non-free/' /etc/apt/sources.list.d/debian.sources
-
-# Define the ARG for the jellyfin-ffmpeg version
-# renovate: datasource=github-releases depName=jellyfin/jellyfin-ffmpeg versioning=loose
-ARG JELLYFIN_FFMPEG_VERSION=7.0.2-5
 
 # Install packages that are needed for the runtime environment
 RUN apt-get update && apt-get install --no-install-recommends -y \
@@ -92,6 +93,10 @@ ENV LIBVA_DRIVER_NAME=iHD
 ENV LIBVA_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,video,utility
+
+LABEL org.opencontainers.image.source=https://github.com/CrystalNET-org/grpc-ffmpeg
+LABEL org.opencontainers.image.description="ffmpeg-worker"
+LABEL org.opencontainers.image.licenses=Apache2.0
 
 # Run the binary
 CMD ["/app/grpc-ffmpeg.py"]
