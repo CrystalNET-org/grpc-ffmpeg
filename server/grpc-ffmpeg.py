@@ -40,9 +40,12 @@ HEALTHCHECK_OUTPUT = '/tmp/healthcheck_output.mp4'
 health_status = {'healthy': False}
 
 # Prometheus metrics
+binary_counters = {
+    binary: Counter(f"{binary}_commands", f"Number of {binary} commands executed")
+    for binary in ALLOWED_BINARIES
+}
 ffmpeg_process_gauge = Gauge("ffmpeg_process_count", "Number of running ffmpeg processes")
-mediainfo_counter = Counter("mediainfo_commands", "Number of mediainfo commands executed")
-ffprobe_counter = Counter("ffprobe_commands", "Number of ffprobe commands executed")
+
 
 class TokenAuthValidator(grpc.AuthMetadataPlugin):
     def __call__(self, context, callback):
@@ -103,11 +106,11 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
             exit_code = process.returncode
             yield ffmpeg_pb2.CommandResponse(exit_code=exit_code, stream="exit_code")
 
-            # Update metrics
-            if "mediainfo" in tokens[0]:
-                mediainfo_counter.inc()
-            elif "ffprobe" in tokens[0]:
-                ffprobe_counter.inc()
+            # Update metrics dynamically based on binary executed
+            for binary in ALLOWED_BINARIES:
+                if binary in tokens[0]:
+                    binary_counters[binary].inc()
+                    break
         finally:
             if "ffmpeg" in tokens[0] and HEALTHCHECK_FILE not in tokens:
                 ffmpeg_process_gauge.dec()
