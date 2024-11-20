@@ -14,8 +14,7 @@ import grpc
 import ffmpeg_pb2
 import ffmpeg_pb2_grpc
 
-from prometheus_client import Gauge, Counter, make_asgi_app
-from prometheus_client import start_http_server as start_prometheus_server
+from prometheus_client import Gauge, Counter, generate_latest, CONTENT_TYPE_LATEST
 
 # Required for MediaInfo and ffmpeg health check
 import aiofiles
@@ -41,9 +40,9 @@ HEALTHCHECK_OUTPUT = '/tmp/healthcheck_output.mp4'
 health_status = {'healthy': False}
 
 # Prometheus metrics
-ffmpeg_gauge = Gauge('ffmpeg_processes', 'Number of running ffmpeg processes')
-mediainfo_counter = Counter('mediainfo_commands', 'Number of mediainfo commands executed')
-ffprobe_counter = Counter('ffprobe_commands', 'Number of ffprobe commands executed')
+ffmpeg_process_gauge = Gauge("ffmpeg_process_count", "Number of running ffmpeg processes")
+mediainfo_counter = Counter("mediainfo_commands", "Number of mediainfo commands executed")
+ffprobe_counter = Counter("ffprobe_commands", "Number of ffprobe commands executed")
 
 class TokenAuthValidator(grpc.AuthMetadataPlugin):
     def __call__(self, context, callback):
@@ -76,46 +75,42 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
 
         # Reconstruct the command
         command = shlex.join(tokens)
+        if "ffmpeg" in tokens[0] and HEALTHCHECK_FILE not in tokens:
+            ffmpeg_process_gauge.inc()
 
-        # Track metrics for this command but dont include health check commands
-        binary = tokens[0].split('/')[-1]
-        exclude_health_check = binary == 'ffmpeg' and HEALTHCHECK_FILE in command
+        try:
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
 
-        if binary == 'ffmpeg' and not exclude_health_check:
-            ffmpeg_gauge.inc()
-        elif binary == 'mediainfo':
-            mediainfo_counter.inc()
-        elif binary == 'ffprobe':
-            ffprobe_counter.inc()
+            async def read_stream(stream, response_type, stream_name):
+                while True:
+                    line = await stream.readline()
+                    if not line:
+                        break
+                    logger.info(f'{stream_name}: {line.decode("utf-8").strip()}')
+                    yield response_type(output=line.decode('utf-8'), stream=stream_name)
 
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
+            async for response in read_stream(process.stdout, ffmpeg_pb2.CommandResponse, "stdout"):
+                yield response
 
-        async def read_stream(stream, response_type, stream_name):
-            while True:
-                line = await stream.readline()
-                if not line:
-                    break
-                logger.info(f'{stream_name}: {line.decode("utf-8").strip()}')
-                yield response_type(output=line.decode('utf-8'), stream=stream_name)
+            async for response in read_stream(process.stderr, ffmpeg_pb2.CommandResponse, "stderr"):
+                yield response
 
-        async for response in read_stream(process.stdout, ffmpeg_pb2.CommandResponse, "stdout"):
-            yield response
+            await process.wait()
+            exit_code = process.returncode
+            yield ffmpeg_pb2.CommandResponse(exit_code=exit_code, stream="exit_code")
 
-        async for response in read_stream(process.stderr, ffmpeg_pb2.CommandResponse, "stderr"):
-            yield response
-
-        await process.wait()
-
-        # decrease counter whenever ffmpeg processes complete
-        if binary == 'ffmpeg' and not exclude_health_check:
-            ffmpeg_gauge.dec()
-
-        exit_code = process.returncode
-        yield ffmpeg_pb2.CommandResponse(exit_code=exit_code, stream="exit_code")
+            # Update metrics
+            if "mediainfo" in tokens[0]:
+                mediainfo_counter.inc()
+            elif "ffprobe" in tokens[0]:
+                ffprobe_counter.inc()
+        finally:
+            if "ffmpeg" in tokens[0] and HEALTHCHECK_FILE not in tokens:
+                ffmpeg_process_gauge.dec()
 
     async def health_check(self):
         logger.info("Running initial health check...")
@@ -164,47 +159,22 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         global health_status
         health_status['healthy'] = is_healthy
 
-    async def run_command(self, command, exclude_health_check=False):
-        """
-        Executes a shell command asynchronously, ensuring proper cleanup to prevent zombie processes.
-        """
-        binary = command.split()[0].split('/')[-1]
-
-        # Track Prometheus metrics
-        if binary == 'ffmpeg' and not exclude_health_check:
-            ffmpeg_gauge.inc()
-        elif binary == 'mediainfo':
-            mediainfo_counter.inc()
-        elif binary == 'ffprobe':
-            ffprobe_counter.inc()
-
-        logger.debug(f"Executing command: {command}")
+    async def run_command(self, command):
         process = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
 
-        try:
-            stdout, stderr = await process.communicate()
-            if process.returncode != 0:
-                logger.error(f"Command failed with exit code {process.returncode}: {stderr.decode().strip()}")
-                raise RuntimeError(stderr.decode().strip())
+        stdout, stderr = await process.communicate()
+        output = stdout.decode().strip() if stdout else ""
+        error = stderr.decode().strip() if stderr else ""
 
-            logger.debug(f"Command output: {stdout.decode().strip()}")
-            return stdout.decode().strip()
-        finally:
-            if binary == 'ffmpeg' and not exclude_health_check:
-                ffmpeg_gauge.dec()
+        if process.returncode != 0:
+            logger.error(f"Command '{command}' failed with error: {error}")
+            return f"Command '{command}' failed with error: {error}"
         
-            output = stdout.decode().strip() if stdout else ""
-            error = stderr.decode().strip() if stderr else ""
-
-            if process.returncode != 0:
-                logger.error(f"Command '{command}' failed with error: {error}")
-                return f"Command '{command}' failed with error: {error}"
-            
-            return output
+        return output
 
     async def is_file_valid(self, filename):
         try:
@@ -239,27 +209,25 @@ async def start_grpc_server():
     finally:
         await server.stop(0)
 
-async def health_check_runner():
-    service = FFmpegService()
-    await service.health_check()
-
 async def start_http_server():
     async def health_check(request):
         if health_status['healthy']:
             return web.Response(text="OK")
         else:
             return web.Response(text="Health check failed", status=500)
-
-    prometheus_app = make_asgi_app()
+        
+    async def metrics(request):
+        return web.Response(body=generate_latest(), content_type=CONTENT_TYPE_LATEST)
+    
     app = web.Application()
     app.router.add_get('/health', health_check)
-    app.router.add_route('*', '/metrics', web._run_app(prometheus_app))
+    app.router.add_get('/metrics', metrics)  # Prometheus metrics endpoint
 
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', 8080)
     await site.start()
-    logger.info('Health check server started on http://localhost:8080/health')
+    logger.info('http endpoint server started on http://localhost:8080 /health and /metrics')
 
     # Keep the server alive until shutdown
     try:
@@ -272,7 +240,7 @@ async def start_http_server():
 
 async def ffmpeg_server():
     grpc_task = asyncio.create_task(start_grpc_server())
-    health_task = asyncio.create_task(health_check_runner())
+    health_task = asyncio.create_task(FFmpegService().health_check())
     http_task = asyncio.create_task(start_http_server())  # Treat HTTP server as a task
 
     try:
