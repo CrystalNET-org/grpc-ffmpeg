@@ -1,6 +1,6 @@
 # Changelog
 
-## [7.0.2](https://github.com/CrystalNET-org/grpc-ffmpeg/releases/tag/7.0.2) - 2024-11-19
+## [7.0.2](https://github.com/CrystalNET-org/grpc-ffmpeg/releases/tag/7.0.2) - 2024-11-20
 
 ### ❤️ Thanks to all contributors! ❤️
 
