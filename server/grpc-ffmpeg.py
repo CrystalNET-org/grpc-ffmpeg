@@ -103,12 +103,16 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
             await self.run_health_check()
 
     async def run_health_check(self):
-        # Run mediainfo on health check file
-        media_info = await self.run_command(f"mediainfo {HEALTHCHECK_FILE}")
-        if "Video" not in media_info:
-            logger.error(f"MediaInfo failed for {HEALTHCHECK_FILE}")
-            self.update_health_status(False)
-            return
+        try:
+            # Run mediainfo on health check file
+            media_info = await self.run_command(f"mediainfo {HEALTHCHECK_FILE}")
+            if "Video" not in media_info:
+                logger.error(f"MediaInfo failed for {HEALTHCHECK_FILE}")
+                self.update_health_status(False)
+                return
+        except asyncio.CancelledError:
+            logger.info("Health check task canceled.")
+            raise
 
         cleanup_command = f"rm -f {HEALTHCHECK_OUTPUT}"
         await self.run_command(cleanup_command)
@@ -217,10 +221,31 @@ def handle_signals():
 async def shutdown(signame):
     logger.info(f"Received signal {signame}, shutting down...")
     tasks = [task for task in asyncio.all_tasks() if task is not asyncio.current_task()]
+
+    # Terminate all subprocesses if any exist
     for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+        if hasattr(task, 'process') and task.process is not None:
+            task.process.terminate()
+        else:
+            task.cancel()
+    await asyncio.gather(*tasks, return_exceptions=True, timeout=5)
+    logger.info("Shutdown complete.")
+
+async def main():
+    try:
+        await ffmpeg_server()
+    except asyncio.CancelledError:
+        logger.info("Main task canceled.")
+        raise
 
 if __name__ == '__main__':
     handle_signals()
-    asyncio.run(ffmpeg_server())
+    try:
+        asyncio.run(main())
+        sys.exit(0)  # Exit with 0 on successful shutdown
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received.")
+        sys.exit(0)  # Exit with 0 on Ctrl+C
+    except Exception as e:
+        logger.error(f"Unhandled exception: {e}")
+        sys.exit(1)  # Exit with 1 on unhandled exceptions
