@@ -165,7 +165,12 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         health_status['healthy'] = is_healthy
 
     async def run_command(self, command, exclude_health_check=False):
+        """
+        Executes a shell command asynchronously, ensuring proper cleanup to prevent zombie processes.
+        """
         binary = command.split()[0].split('/')[-1]
+
+        # Track Prometheus metrics
         if binary == 'ffmpeg' and not exclude_health_check:
             ffmpeg_gauge.inc()
         elif binary == 'mediainfo':
@@ -173,25 +178,33 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         elif binary == 'ffprobe':
             ffprobe_counter.inc()
 
+        logger.debug(f"Executing command: {command}")
         process = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
 
-        stdout, stderr = await process.communicate()
+        try:
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                logger.error(f"Command failed with exit code {process.returncode}: {stderr.decode().strip()}")
+                raise RuntimeError(stderr.decode().strip())
 
-        if binary == 'ffmpeg' and not exclude_health_check:
-            ffmpeg_gauge.dec()
+            logger.debug(f"Command output: {stdout.decode().strip()}")
+            return stdout.decode().strip()
+        finally:
+            if binary == 'ffmpeg' and not exclude_health_check:
+                ffmpeg_gauge.dec()
         
-        output = stdout.decode().strip() if stdout else ""
-        error = stderr.decode().strip() if stderr else ""
+            output = stdout.decode().strip() if stdout else ""
+            error = stderr.decode().strip() if stderr else ""
 
-        if process.returncode != 0:
-            logger.error(f"Command '{command}' failed with error: {error}")
-            return f"Command '{command}' failed with error: {error}"
-        
-        return output
+            if process.returncode != 0:
+                logger.error(f"Command '{command}' failed with error: {error}")
+                return f"Command '{command}' failed with error: {error}"
+            
+            return output
 
     async def is_file_valid(self, filename):
         try:
@@ -241,7 +254,7 @@ async def start_http_server():
     app = web.Application()
     app.router.add_get('/health', health_check)
     app.router.add_route('*', '/metrics', web._run_app(prometheus_app))
-    
+
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', 8080)
