@@ -22,7 +22,7 @@ steps:
           from_secret: GITHUB_TOKEN
       registry: harbor.crystalnet.org
       tags: dev
-      dockerfile: Dockerfile
+      dockerfile: docker/Dockerfile.server
       platforms: linux/amd64
       dry_run: false
 when:

@@ -55,7 +55,7 @@ python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/ffmpeg.
 #### Using Python directly:
 
 ```bash
-python server/grpc-ffmpeg.py
+python src/server/grpc-ffmpeg.py
 ```
 
 #### Using Docker:
@@ -63,19 +63,19 @@ python server/grpc-ffmpeg.py
 Build the Docker image:
 
 ```bash
-docker build -t grpc-ffmpeg-service .
+docker build -t grpc-ffmpeg-server -f docker/Dockerfile.server .
 ```
 
 Run the Docker container:
 
 ```bash
-docker run -p 50051:50051 -p 8080:8080 grpc-ffmpeg-service
+docker run -p 50051:50051 -p 8080:8080 grpc-ffmpeg-server
 ```
 
 ### Running the Client
 
 ```bash
-python client/grpc-ffmpeg.py <ffmpeg_command>
+python src/client/grpc-ffmpeg.py <ffmpeg_command>
 ```
 
 ### Environment Variables
@@ -104,7 +104,7 @@ export USE_SSL=true
 export SSL_KEY_PATH=/path/to/server.key
 export SSL_CERT_PATH=/path/to/server.crt
 export VALID_TOKEN=my_secret_token1
-python server/grpc-ffmpeg.py
+python src/server/grpc-ffmpeg.py
 ```
 
 #### Client
@@ -115,7 +115,7 @@ Send a command to the server with SSL:
 export USE_SSL=true
 export CERTIFICATE_PATH=/path/to/server.crt
 export AUTH_TOKEN=my_secret_token1
-python client/grpc-ffmpeg.py "ffmpeg -i input.mp4 output.mp4"
+python src/client/grpc-ffmpeg.py "ffmpeg -i input.mp4 output.mp4"
 ```
 
 ### License
