@@ -220,7 +220,8 @@ async def start_http_server():
             return web.Response(text="Health check failed", status=500)
         
     async def metrics(request):
-        return web.Response(body=generate_latest(), content_type=CONTENT_TYPE_LATEST)
+
+        return web.Response(body=generate_latest(), headers={"Content-Type": CONTENT_TYPE_LATEST})
     
     app = web.Application()
     app.router.add_get('/health', health_check)
