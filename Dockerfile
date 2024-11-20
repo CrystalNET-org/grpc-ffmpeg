@@ -1,6 +1,6 @@
 ARG PROTOC_VERSION=28.2
 # renovate: datasource=github-releases depName=jellyfin/jellyfin-ffmpeg versioning=loose
-ARG JELLYFIN_FFMPEG_VERSION=7.0.2-5
+ARG JELLYFIN_FFMPEG_VERSION=7.0.2-7
 
 FROM debian:bookworm-slim AS builder
 ARG PROTOC_VERSION
@@ -38,52 +38,54 @@ ARG JELLYFIN_FFMPEG_VERSION
 RUN sed -i 's/Components: main/Components: main contrib non-free/' /etc/apt/sources.list.d/debian.sources
 
 # Install packages that are needed for the runtime environment
-RUN apt-get update && apt-get install --no-install-recommends -y \
-    libssl3 \
-    libc-bin \
-    ca-certificates \
-    wget \
-    python3-pip \
-    intel-media-va-driver-non-free \
-    i965-va-driver \
-    intel-opencl-icd \
-    nvidia-vaapi-driver \
-    libbluray2 \
-    libllvm16 \
-    mediainfo \
-    libmp3lame0 \
-    libopenmpt0 \
-    libvpx7 \
-    libwebp7 \
-    libwebpmux3 \
-    libx264-164 \
-    libx265-199 \
-    libzvbi0 \
-    libopus0 \
-    libtheora0 \
-    libvorbisenc2
+RUN apt-get update && \
+    apt-get install --no-install-recommends -y \
+        libssl3 \
+        libc-bin \
+        ca-certificates \
+        wget \
+        python3-pip \
+        intel-media-va-driver-non-free \
+        i965-va-driver \
+        intel-opencl-icd \
+        nvidia-vaapi-driver \
+        libbluray2 \
+        libllvm16 \
+        mediainfo \
+        libmp3lame0 \
+        libopenmpt0 \
+        libvpx7 \
+        libwebp7 \
+        libwebpmux3 \
+        libx264-164 \
+        libx265-199 \
+        libzvbi0 \
+        libopus0 \
+        libtheora0 \
+        libvorbisenc2 && \
+    apt-get clean
 
 
 # setup python specific environment
 COPY requirements.txt /app/
-RUN pip3 install --break-system-packages --upgrade pip
-RUN python3 -m pip install --break-system-packages -r /app/requirements.txt
+RUN pip3 install --break-system-packages --upgrade pip && \
+    python3 -m pip install --break-system-packages -r /app/requirements.txt && \
+    pip cache purge
 
 # Download and install jellifin's fork of ffmpeg which comes with additional codecs and improved hw accelleration routines
 RUN wget https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JELLYFIN_FFMPEG_VERSION}/jellyfin-ffmpeg7_${JELLYFIN_FFMPEG_VERSION}-bookworm_amd64.deb && \
     dpkg -i jellyfin-ffmpeg7_${JELLYFIN_FFMPEG_VERSION}-bookworm_amd64.deb && \
     apt-get install -f && \
-    rm jellyfin-ffmpeg7_${JELLYFIN_FFMPEG_VERSION}-bookworm_amd64.deb
+    rm jellyfin-ffmpeg7_${JELLYFIN_FFMPEG_VERSION}-bookworm_amd64.deb && \
+    apt-get clean
 
 # Copy the build artifact from the build stage
 COPY /server/ /app/
-COPY /client/ /client/
 
 COPY --from=builder /app/ffmpeg* /app/
 COPY --from=builder /app/ffmpeg* /client/
 
 RUN chmod a+x /app/grpc-ffmpeg.py
-RUN chmod a+x /client/grpc-ffmpeg.py
 
 # Expose the port the service runs on
 EXPOSE 50051 8080

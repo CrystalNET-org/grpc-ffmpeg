@@ -83,15 +83,15 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                 logger.info(f'{stream_name}: {line.decode("utf-8").strip()}')
                 yield response_type(output=line.decode('utf-8'), stream=stream_name)
 
-        async for response in read_stream(process.stdout, ffmpeg_pb2.CommandResponse, "STDOUT"):
+        async for response in read_stream(process.stdout, ffmpeg_pb2.CommandResponse, "stdout"):
             yield response
 
-        async for response in read_stream(process.stderr, ffmpeg_pb2.CommandResponse, "STDERR"):
+        async for response in read_stream(process.stderr, ffmpeg_pb2.CommandResponse, "stderr"):
             yield response
 
         await process.wait()
         exit_code = process.returncode
-        yield ffmpeg_pb2.CommandResponse(exit_code=exit_code)
+        yield ffmpeg_pb2.CommandResponse(exit_code=exit_code, stream="exit_code")
 
     async def health_check(self):
         logger.info("Running initial health check...")
