@@ -14,6 +14,9 @@ import grpc
 import ffmpeg_pb2
 import ffmpeg_pb2_grpc
 
+from prometheus_client import Gauge, Counter, make_asgi_app
+from prometheus_client import start_http_server as start_prometheus_server
+
 # Required for MediaInfo and ffmpeg health check
 import aiofiles
 from pymediainfo import MediaInfo
@@ -36,6 +39,11 @@ HEALTHCHECK_OUTPUT = '/tmp/healthcheck_output.mp4'
 
 # Variable to store health status
 health_status = {'healthy': False}
+
+# Prometheus metrics
+ffmpeg_gauge = Gauge('ffmpeg_processes', 'Number of running ffmpeg processes')
+mediainfo_counter = Counter('mediainfo_commands', 'Number of mediainfo commands executed')
+ffprobe_counter = Counter('ffprobe_commands', 'Number of ffprobe commands executed')
 
 class TokenAuthValidator(grpc.AuthMetadataPlugin):
     def __call__(self, context, callback):
@@ -69,6 +77,17 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         # Reconstruct the command
         command = shlex.join(tokens)
 
+        # Track metrics for this command but dont include health check commands
+        binary = tokens[0].split('/')[-1]
+        exclude_health_check = binary == 'ffmpeg' and HEALTHCHECK_FILE in command
+
+        if binary == 'ffmpeg' and not exclude_health_check:
+            ffmpeg_gauge.inc()
+        elif binary == 'mediainfo':
+            mediainfo_counter.inc()
+        elif binary == 'ffprobe':
+            ffprobe_counter.inc()
+
         process = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
@@ -90,6 +109,11 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
             yield response
 
         await process.wait()
+
+        # decrease counter whenever ffmpeg processes complete
+        if binary == 'ffmpeg' and not exclude_health_check:
+            ffmpeg_gauge.dec()
+
         exit_code = process.returncode
         yield ffmpeg_pb2.CommandResponse(exit_code=exit_code, stream="exit_code")
 
@@ -110,6 +134,7 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                 logger.error(f"MediaInfo failed for {HEALTHCHECK_FILE}")
                 self.update_health_status(False)
                 return
+
         except asyncio.CancelledError:
             logger.info("Health check task canceled.")
             raise
@@ -120,6 +145,7 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         # Run ffmpeg conversion test
         ffmpeg_command = f"{BINARY_PATH_PREFIX}ffmpeg -i {HEALTHCHECK_FILE} {HEALTHCHECK_OUTPUT}"
         ffmpeg_output = await self.run_command(ffmpeg_command)
+
         if "Conversion failed" in ffmpeg_output:
             logger.error("FFmpeg conversion test failed")
             self.update_health_status(False)
@@ -138,7 +164,15 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         global health_status
         health_status['healthy'] = is_healthy
 
-    async def run_command(self, command):
+    async def run_command(self, command, exclude_health_check=False):
+        binary = command.split()[0].split('/')[-1]
+        if binary == 'ffmpeg' and not exclude_health_check:
+            ffmpeg_gauge.inc()
+        elif binary == 'mediainfo':
+            mediainfo_counter.inc()
+        elif binary == 'ffprobe':
+            ffprobe_counter.inc()
+
         process = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
@@ -146,6 +180,10 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         )
 
         stdout, stderr = await process.communicate()
+
+        if binary == 'ffmpeg' and not exclude_health_check:
+            ffmpeg_gauge.dec()
+        
         output = stdout.decode().strip() if stdout else ""
         error = stderr.decode().strip() if stderr else ""
 
@@ -199,8 +237,11 @@ async def start_http_server():
         else:
             return web.Response(text="Health check failed", status=500)
 
+    prometheus_app = make_asgi_app()
     app = web.Application()
     app.router.add_get('/health', health_check)
+    app.router.add_route('*', '/metrics', web._run_app(prometheus_app))
+    
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '0.0.0.0', 8080)

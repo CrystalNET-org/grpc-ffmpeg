@@ -3,3 +3,4 @@ grpcio-tools
 aiofiles
 aiohttp
 pymediainfo
+prometheus_client
