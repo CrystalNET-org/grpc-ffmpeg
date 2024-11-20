@@ -29,55 +29,6 @@ grpc-ffmpeg/
 
 Shared tmp directories between the client and worker containers (for jellyfin this would be the cache directory)
 
-### Building the Project
-
-#### 1. Clone the repository:
-
-```bash
-git clone https://github.com/CrystalNET-org/grpc-ffmpeg.git
-cd grpc-ffmpeg
-```
-
-#### 2. Install Python dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-#### 3. Compile the Protobuf definition:
-
-```bash
-python -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. proto/ffmpeg.proto
-```
-
-### Running the Server
-
-#### Using Python directly:
-
-```bash
-python src/server/grpc-ffmpeg.py
-```
-
-#### Using Docker:
-
-Build the Docker image:
-
-```bash
-docker build -t grpc-ffmpeg-server -f docker/Dockerfile.server .
-```
-
-Run the Docker container:
-
-```bash
-docker run -p 50051:50051 -p 8080:8080 grpc-ffmpeg-server
-```
-
-### Running the Client
-
-```bash
-python src/client/grpc-ffmpeg.py <ffmpeg_command>
-```
-
 ### Environment Variables
 
 The following environment variables can be set to configure the server and client:
