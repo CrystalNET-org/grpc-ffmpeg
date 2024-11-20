@@ -7,17 +7,17 @@ This project provides a gRPC-based service for executing FFmpeg commands. It con
 ## Directory Structure
 
 ```
-.
-├── proto
-│   └── ffmpeg.proto        # Protobuf definition file
-├── server
-│   └── grpc-ffmpeg.py      # Server script
-├── client
-│   └── grpc-ffmpeg.py      # Client script
-│   └── Dockerfile          # Dockerfile for building and running the client
-├── Dockerfile              # Dockerfile for building and running the server
-├── README.md               # Project documentation
-└── requirements.txt        # Python dependencies
+grpc-ffmpeg/
+├── src/
+│   ├── server/
+│   ├── client/
+│   └── proto/
+├── docs/
+├── docker/
+├── scripts/
+├── LICENSE
+├── README.md
+├── requirements.txt
 ```
 
 ## Getting Started

@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  grpc-server:
+    image: grpc-ffmpeg-server:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.server
+    container_name: grpc_ffmpeg_server
+    ports:
+      - "50051:50051"  # Expose the gRPC server port
+    environment:
+      - FFMPEG_PATH=/usr/bin/ffmpeg
+      - SSL_CERT_PATH=/certs/cert.pem
+      - AUTH_TOKEN=your_auth_token_here
+    volumes:
+      - ./data:/app/data           # Example: Map local data directory to the container
+      - ./certs:/certs             # SSL certificates if needed
+    restart: always
+
+  grpc-client:
+    image: grpc-ffmpeg-client:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.client
+    container_name: grpc_ffmpeg_client
+    environment:
+      - SERVER_HOST=grpc-server    # Reference the server service by name
+      - SERVER_PORT=50051
+      - AUTH_TOKEN=your_auth_token_here
+    volumes:
+      - ./data:/app/data           # Example: Map local data directory to the container
+    depends_on:
+      - grpc-server
+    restart: on-failure
