@@ -30,6 +30,7 @@ BINARY_PATH_PREFIX = os.getenv('BINARY_PATH_PREFIX', '/usr/lib/jellyfin-ffmpeg/'
 SSL_KEY_PATH = os.getenv('SSL_KEY_PATH', 'server.key')
 SSL_CERT_PATH = os.getenv('SSL_CERT_PATH', 'server.crt')
 USE_SSL = os.getenv('USE_SSL', 'false').lower() == 'true'
+MAX_FFMPEG_WORKERS= os.getenv('MAX_FFMPEG_WORKERS', 10)
 
 # Health check variables
 HEALTHCHECK_INTERVAL = 60  # Interval in seconds (1 hour)
@@ -45,6 +46,7 @@ binary_counters = {
     for binary in ALLOWED_BINARIES
 }
 ffmpeg_process_gauge = Gauge("ffmpeg_process_count", "Number of running ffmpeg processes")
+ffmpeg_max_workers_gauge = Gauge('ffmpeg_max_workers', 'Maximum number of allowed ffmpeg processes based on thread pool size')
 
 
 class TokenAuthValidator(grpc.AuthMetadataPlugin):
@@ -188,8 +190,11 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
             return False
 
 async def start_grpc_server():
-    server = grpc.aio.server(ThreadPoolExecutor(max_workers=10))
+    server = grpc.aio.server(ThreadPoolExecutor(max_workers=MAX_FFMPEG_WORKERS))
     ffmpeg_pb2_grpc.add_FFmpegServiceServicer_to_server(FFmpegService(), server)
+
+    # Set the ffmpeg_max_workers metric to the max_workers value
+    ffmpeg_max_workers_gauge.set(MAX_FFMPEG_WORKERS)
 
     listen_addr = '0.0.0.0:50051'
     if USE_SSL:
