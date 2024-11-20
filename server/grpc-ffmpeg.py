@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Configuration
 VALID_TOKEN = os.getenv('VALID_TOKEN', 'my_secret_token')
-ALLOWED_BINARIES = ['ffmpeg', 'ffprobe', 'mediainfo']  # Added 'mediainfo' to allowed binaries
+ALLOWED_BINARIES = ['ffmpeg', 'ffprobe', 'mediainfo', 'vainfo']  # Added 'mediainfo' to allowed binaries
 BINARY_PATH_PREFIX = os.getenv('BINARY_PATH_PREFIX', '/usr/lib/jellyfin-ffmpeg/')
 SSL_KEY_PATH = os.getenv('SSL_KEY_PATH', 'server.key')
 SSL_CERT_PATH = os.getenv('SSL_CERT_PATH', 'server.crt')
