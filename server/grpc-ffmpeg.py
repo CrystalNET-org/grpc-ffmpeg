@@ -207,11 +207,25 @@ async def start_http_server():
     await site.start()
     logger.info('Health check server started on http://localhost:8080/health')
 
+    # Keep the server alive until shutdown
+    try:
+        await asyncio.Future()  # Placeholder to keep the server running
+    except asyncio.CancelledError:
+        logger.info("HTTP server shutdown initiated.")
+    finally:
+        await runner.cleanup()  # Cleanup on shutdown
+
+
 async def ffmpeg_server():
     grpc_task = asyncio.create_task(start_grpc_server())
-    http_task = asyncio.create_task(start_http_server())
     health_task = asyncio.create_task(health_check_runner())
-    await asyncio.gather(grpc_task, http_task, health_task)
+    http_task = asyncio.create_task(start_http_server())  # Treat HTTP server as a task
+
+    try:
+        await asyncio.gather(grpc_task, health_task, http_task)
+    except asyncio.CancelledError:
+        logger.info("Server tasks canceled. Cleaning up...")
+        raise
 
 def handle_signals():
     loop = asyncio.get_event_loop()
