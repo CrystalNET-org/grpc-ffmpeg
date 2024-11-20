@@ -1,0 +1,145 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: ffmpeg-worker
+spec:
+  podManagementPolicy: OrderedReady
+  replicas: 3
+  revisionHistoryLimit: 3
+
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: ffmpeg-worker
+      app.kubernetes.io/name: ffmpeg-worker
+
+  serviceName: ffmpeg-worker
+
+  updateStrategy:
+    rollingUpdate:
+      partition: 0
+    type: RollingUpdate
+
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: ffmpeg-worker
+        app.kubernetes.io/name: ffmpeg-worker
+      annotations:
+        prometheus.io/scrape: 'true'
+        prometheus.io/path: '/metrics'
+        prometheus.io/port: '8080'
+    spec:   
+      terminationGracePeriodSeconds: 5
+      
+      nodeSelector:
+        node-role.kubernetes.io/worker: worker
+
+      securityContext:
+        fsGroup: 64710
+        runAsGroup: 64710
+        runAsNonRoot: true
+        runAsUser: 64710
+        seccompProfile:
+          type: RuntimeDefault
+
+      containers:
+      - name: ffmpeg-worker
+        image: harbor.crystalnet.org/library/ffmpeg-worker:dev
+        imagePullPolicy: Always
+
+        env:
+          - name: VALID_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: grpc-ffmpeg
+                key: VALID_TOKEN
+            
+        resources:
+          limits:
+            cpu: "2"
+            memory: 4Gi
+            gpu.intel.com/i915: 1
+          requests:
+            cpu: 500m
+            memory: 512Mi
+            gpu.intel.com/i915: 1
+
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: false
+          runAsGroup: 64710
+          runAsNonRoot: true
+          runAsUser: 64710
+
+        ports:
+        - containerPort: 50051
+          name: grpc
+          protocol: TCP
+        - name: liveness-port
+          containerPort: 8080
+          protocol: TCP
+        livenessProbe:
+          failureThreshold: 3
+          tcpSocket:
+            port: grpc
+          initialDelaySeconds: 30
+          periodSeconds: 30
+          successThreshold: 1
+          timeoutSeconds: 10
+
+        startupProbe:
+          failureThreshold: 20
+          tcpSocket:
+            port: grpc
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 10
+
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+              path: /health
+              port: liveness-port
+          periodSeconds: 10
+          successThreshold: 1
+          timeoutSeconds: 10
+
+        volumeMounts:
+        - mountPath: /data/data/subtitles
+          name: subtitles
+        - mountPath: /transcoding
+          name: transcoding
+        - mountPath: /cache
+          name: cache
+        - mountPath: /tmp
+          name: tmp
+        - mountPath: /log
+          name: log
+# add your media directories here to mount them in the same location as they are in jellyfin
+
+
+      volumes:
+      - name: transcoding
+        persistentVolumeClaim:
+          claimName: transcoding
+      - name: cache
+        persistentVolumeClaim:
+          claimName: cache
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+        name: tmp
+      - name: subtitles
+        persistentVolumeClaim:
+          claimName: subtitles
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 1Gi
+        name: log
+
+  persistentVolumeClaimRetentionPolicy:
+    whenDeleted: Retain
+    whenScaled: Retain
