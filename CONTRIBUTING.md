@@ -10,14 +10,12 @@ To make the contribution process smooth, please follow these guidelines.
 ## Table of Contents
 
 - [Getting Started](#getting-started)
-- [Code of Conduct](#code-of-conduct)
 - [How to Contribute](#how-to-contribute)
   - [Reporting Bugs](#reporting-bugs)
   - [Suggesting Features](#suggesting-features)
   - [Submitting Code](#submitting-code)
 - [Development Workflow](#development-workflow)
 - [Coding Standards](#coding-standards)
-- [Testing Guidelines](#testing-guidelines)
 - [Pull Request Checklist](#pull-request-checklist)
 
 ---
