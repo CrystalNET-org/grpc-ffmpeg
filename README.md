@@ -1,6 +1,6 @@
 # GRPC FFmpeg Service
 
-![GPL3](https://img.shields.io/badge/license-GPLv3-blue) [![Pipeline Status](https://ci.cluster.lan.crystalnet.org/api/badges/10/status.svg)](https://ci.cluster.lan.crystalnet.org/repos/10) [![Discord](https://dcbadge.limes.pink/api/server/Yj5AYwcGXu)](https://discord.gg/Yj5AYwcGXu)
+![GPL3](https://img.shields.io/badge/license-GPLv3-blue) [![Pipeline Status](https://ci.cluster.lan.crystalnet.org/api/badges/10/status.svg)](https://ci.cluster.lan.crystalnet.org/repos/10) [![Discord](https://dcbadge.limes.pink/api/server/Yj5AYwcGXu?style=flat)](https://discord.gg/Yj5AYwcGXu)
 ## Overview
 
 This project provides a gRPC-based service for executing FFmpeg commands. It consists of a server that processes FFmpeg commands and a client that sends commands to the server. The server is designed to be secure and configurable, with options for SSL and token-based authentication.
