@@ -21,7 +21,7 @@ RUN curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v${PR
     unzip protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /app/.local
 
 # Upgrade pip (we throw away the build context anyways, so we are fine with breaking our system ^^)
-RUN pip3 install --break-system-packages --upgrade pip
+#RUN pip3 install --break-system-packages --upgrade pip
 
 # move our protobuf definition file into our context
 COPY src/proto/ffmpeg.proto .
@@ -66,8 +66,7 @@ RUN apt-get update && \
 
 # setup python specific environment
 COPY requirements.txt /app/
-RUN pip3 install --break-system-packages --upgrade pip && \
-    python3 -m pip install --break-system-packages -r /app/requirements.txt && \
+RUN python3 -m pip install --break-system-packages -r /app/requirements.txt && \
     pip cache purge
 
 # Download and install jellifin's fork of ffmpeg which comes with additional codecs and improved hw accelleration routines
