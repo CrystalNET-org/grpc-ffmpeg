@@ -40,26 +40,25 @@ RUN sed -i 's/Components: main/Components: main contrib non-free/' /etc/apt/sour
 # Install packages that are needed for the runtime environment
 RUN apt-get update && \
     apt-get install --no-install-recommends -y \
-        libssl3 \
+        libssl3t64 \
         libc-bin \
         ca-certificates \
         wget \
         python3-pip \
         intel-media-va-driver-non-free \
         i965-va-driver \
-        intel-opencl-icd \
         nvidia-vaapi-driver \
         libbluray2 \
-        libllvm16 \
+        libllvm17t64 \
         mediainfo \
         libmp3lame0 \
-        libopenmpt0 \
-        libvpx7 \
+        libopenmpt0t64 \
+        libvpx9 \
         libwebp7 \
         libwebpmux3 \
         libx264-164 \
-        libx265-199 \
-        libzvbi0 \
+        libx265-215 \
+        libzvbi0t64 \
         libopus0 \
         libtheora0 \
         libvorbisenc2 && \
