@@ -48,6 +48,7 @@ RUN apt-get update && \
         intel-media-va-driver-non-free \
         i965-va-driver \
         nvidia-vaapi-driver \
+        ocl-icd-libopencl1 \
         libbluray2 \
         libllvm17t64 \
         mediainfo \
