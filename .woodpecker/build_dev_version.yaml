@@ -1,13 +1,6 @@
-clone:
-  git:
-    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-git:2.6.0
-    settings:
-      partial: false
-      depth: 1
-
 steps:
   docker-build-dev:
-    image: woodpeckerci/plugin-docker-buildx:5.0.0
+    image: woodpeckerci/plugin-docker-buildx:6.0.3
     settings:
       debug: true
       repo: harbor.crystalnet.org/library/ffmpeg-worker,ghcr.io/crystalnet-org/ffmpeg-worker

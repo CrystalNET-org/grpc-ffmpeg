@@ -8,14 +8,15 @@ clone:
 steps:
   renovate:
     image: harbor.crystalnet.org/dockerhub-proxy/renovate/renovate:39.26.3
-    secrets: 
-      - github_com_token
-      - renovate_token
     environment:
-      - RENOVATE_CONFIG_FILE=.woodpecker/renovate_config.json
-      - RENOVATE_DRY_RUN=false
-      - RENOVATE_ENDPOINT=https://api.github.com
-      - SHELL=/bin/bash
+      GITHUB_COM_TOKEN:
+          from_secret: github_com_token
+      RENOVATE_TOKEN:
+          from_secret: renovate_token
+      RENOVATE_CONFIG_FILE: .woodpecker/renovate_config.json
+      RENOVATE_DRY_RUN: false
+      RENOVATE_ENDPOINT: https://api.github.com
+      SHELL: /bin/bash
     commands:
       - LOG_LEVEL=debug renovate --platform github --git-author "Renovate <renovate@local.bot>" --ignore-pr-author true
 when:
