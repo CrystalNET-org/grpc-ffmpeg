@@ -82,7 +82,7 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         tokens = shlex.split(command)
 
         # Check if the command is allowed
-        if tokens[0] not in ALLOWED_BINARIES:
+        if not tokens or tokens[0] not in ALLOWED_BINARIES:
             yield ffmpeg_pb2.CommandResponse(
                 output="Error: Command not allowed", exit_code=1
             )
@@ -91,14 +91,31 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         # Prepend the binary path prefix
         tokens[0] = os.path.join(BINARY_PATH_PREFIX, tokens[0])
 
-        # Reconstruct the command
-        command = shlex.join(tokens)
+        # Heuristic to rejoin paths that were split due to lack of quotes
+        try:
+            new_tokens = []
+            i = 0
+            while i < len(tokens):
+                token = tokens[i]
+                new_tokens.append(token)
+                i += 1
+                if token == '-i' and i < len(tokens):
+                    path_parts = [tokens[i]]
+                    i += 1
+                    while i < len(tokens) and not tokens[i].startswith('-'):
+                        path_parts.append(tokens[i])
+                        i += 1
+                    new_tokens.append(' '.join(path_parts))
+            tokens = new_tokens
+        except Exception as e:
+            logger.warning(f"Path joining heuristic failed: {e}, using original tokens.")
+
         if "ffmpeg" in tokens[0] and HEALTHCHECK_FILE not in tokens:
             ffmpeg_process_gauge.inc()
 
         try:
-            process = await asyncio.create_subprocess_shell(
-                command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            process = await asyncio.create_subprocess_exec(
+                *tokens, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
 
             async def read_stream(stream, response_type, stream_name):
