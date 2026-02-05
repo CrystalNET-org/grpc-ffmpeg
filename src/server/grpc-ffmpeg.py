@@ -123,8 +123,11 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                     line = await stream.readline()
                     if not line:
                         break
-                    logger.info(f'{stream_name}: {line.decode("utf-8").strip()}')
-                    yield response_type(output=line.decode("utf-8"), stream=stream_name)
+                    # Attempt to decode as UTF-8, replacing characters that cannot be decoded
+                    decoded_line = line.decode("utf-8", errors='replace').strip()
+                    
+                    logger.info(f'{stream_name}: {decoded_line}')
+                    yield response_type(output=decoded_line, stream=stream_name)
 
             async for response in read_stream(
                 process.stdout, ffmpeg_pb2.CommandResponse, "stdout"
