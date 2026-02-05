@@ -38,10 +38,16 @@ async def run_command(command, use_ssl):
         stub = ffmpeg_pb2_grpc.FFmpegServiceStub(channel)
         request = ffmpeg_pb2.CommandRequest(command=command)
         async for response in stub.ExecuteCommand(request):
-            if response.stream == "stdout":
-                sys.stdout.write(f"{response.output}")
-            elif response.stream == "stderr":
-                sys.stderr.write(f"{response.output}")
+            if response.binary_output:
+                sys.stdout.buffer.write(response.binary_output)
+                sys.stdout.flush()
+            elif response.output:
+                if response.stream == "stdout":
+                    sys.stdout.write(response.output)
+                    sys.stdout.flush()
+                elif response.stream == "stderr":
+                    sys.stderr.write(response.output)
+                    sys.stderr.flush()
             elif response.stream == "exit_code":
                 exit_code = response.exit_code
 

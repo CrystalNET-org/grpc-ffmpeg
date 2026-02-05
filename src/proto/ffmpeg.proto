@@ -14,4 +14,5 @@ message CommandResponse {
   string output = 1;
   int32 exit_code = 2;
   string stream = 3; // "stdout", "stderr", or "exit_code"
+  bytes binary_output = 4;
 }

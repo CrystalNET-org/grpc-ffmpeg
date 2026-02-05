@@ -123,11 +123,16 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                     line = await stream.readline()
                     if not line:
                         break
-                    # Attempt to decode as UTF-8, replacing characters that cannot be decoded
-                    decoded_line = line.decode("utf-8", errors='replace').strip()
                     
-                    logger.info(f'{stream_name}: {decoded_line}')
-                    yield response_type(output=decoded_line, stream=stream_name)
+                    try:
+                        # Try to decode as UTF-8 to see if it's text
+                        decoded_line = line.decode('utf-8')
+                        logger.info(f'{stream_name}: {decoded_line.strip()}')
+                        yield response_type(output=decoded_line, stream=stream_name)
+                    except UnicodeDecodeError:
+                        # If decoding fails, treat it as binary data
+                        logger.info(f'Sending binary data on {stream_name}')
+                        yield response_type(binary_output=line, stream=stream_name)
 
             async for response in read_stream(
                 process.stdout, ffmpeg_pb2.CommandResponse, "stdout"
