@@ -215,13 +215,14 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         health_status["healthy"] = is_healthy
 
     async def run_command(self, command):
-        process = await asyncio.create_subprocess_shell(
-            command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        args = shlex.split(command)
+        process = await asyncio.create_subprocess_exec(
+            *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
 
         stdout, stderr = await process.communicate()
-        output = stdout.decode().strip() if stdout else ""
-        error = stderr.decode().strip() if stderr else ""
+        output = stdout.decode("utf-8", errors="replace").strip() if stdout else ""
+        error = stderr.decode("utf-8", errors="replace").strip() if stderr else ""
 
         if process.returncode != 0:
             logger.error(f"Command '{command}' failed with error: {error}")

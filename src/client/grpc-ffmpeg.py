@@ -33,25 +33,45 @@ async def run_command(command, use_ssl):
         channel = grpc.aio.insecure_channel(target)
 
     exit_code = 0  # Default exit code
+    max_retries = 5
+    base_delay = 1.0
 
-    async with channel:
-        stub = ffmpeg_pb2_grpc.FFmpegServiceStub(channel)
-        request = ffmpeg_pb2.CommandRequest(command=command)
-        async for response in stub.ExecuteCommand(request):
-            if response.binary_output:
-                sys.stdout.buffer.write(response.binary_output)
-                sys.stdout.flush()
-            elif response.output:
-                if response.stream == "stdout":
-                    sys.stdout.write(response.output)
-                    sys.stdout.flush()
-                elif response.stream == "stderr":
-                    sys.stderr.write(response.output)
-                    sys.stderr.flush()
-            elif response.stream == "exit_code":
-                exit_code = response.exit_code
+    for attempt in range(max_retries):
+        try:
+            async with channel:
+                stub = ffmpeg_pb2_grpc.FFmpegServiceStub(channel)
+                request = ffmpeg_pb2.CommandRequest(command=command)
+                async for response in stub.ExecuteCommand(request):
+                    if response.binary_output:
+                        sys.stdout.buffer.write(response.binary_output)
+                        sys.stdout.flush()
+                    elif response.output:
+                        if response.stream == "stdout":
+                            sys.stdout.write(response.output)
+                            sys.stdout.flush()
+                        elif response.stream == "stderr":
+                            sys.stderr.write(response.output)
+                            sys.stderr.flush()
+                    elif response.stream == "exit_code":
+                        exit_code = response.exit_code
+                
+                return exit_code # Success
 
-    return exit_code
+        except grpc.aio.AioRpcError as e:
+            if e.code() == grpc.StatusCode.UNAVAILABLE and attempt < max_retries - 1:
+                delay = base_delay * (2 ** attempt)
+                sys.stderr.write(f"Server unavailable, retrying in {delay:.1f} seconds... (Attempt {attempt + 1}/{max_retries})\n")
+                await asyncio.sleep(delay)
+                continue
+            else:
+                sys.stderr.write(f"gRPC error after {attempt + 1} attempts: {e.details()}\n")
+                return 1 # Non-retryable error or max retries reached
+        except Exception as e:
+            sys.stderr.write(f"An unexpected error occurred: {e}\n")
+            return 1
+
+    sys.stderr.write("Command failed after reaching max retries.\n")
+    return 1
 
 
 def handle_quoted_arguments(command_args):
