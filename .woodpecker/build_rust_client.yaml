@@ -9,8 +9,8 @@ steps:
       PROTOC_VERSION: 33.2
     commands:
       - apt-get update && apt-get install -y curl unzip musl-tools
-      - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip
-      - unzip protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
+      - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-$${PROTOC_VERSION}-linux-x86_64.zip
+      - unzip protoc-$${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
       - rustup target add x86_64-unknown-linux-musl
       - cd src/client/rust
       - PATH="/usr/local/bin:$PATH" cargo build --release --target=x86_64-unknown-linux-musl
