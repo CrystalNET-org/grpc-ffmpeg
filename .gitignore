@@ -2,5 +2,3 @@
 /src/client/rust/target/
 /src/client/rust//Cargo.lock
 **/*.rs.bk
-/.cargo/config
-/.cargo/config.toml
