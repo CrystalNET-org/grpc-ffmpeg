@@ -1,0 +1,43 @@
+steps:
+  - name: build_binaries
+    image: rust:1.93
+    environment:
+      PROTOC_VERSION: 33.2
+    commands:
+      # Install build tools and protobuf compiler
+      - apt-get update && apt-get install -y curl unzip musl-tools gcc-aarch64-linux-gnu
+      - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-$${PROTOC_VERSION}-linux-x86_64.zip
+      - unzip protoc-$${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
+
+      # Add Rust targets and configure linker for aarch64
+      - rustup target add x86_64-unknown-linux-musl
+      - rustup target add aarch64-unknown-linux-musl
+      - cd src/client/rust
+
+      # Build for amd64
+      - PATH="/usr/local/bin:$PATH" cargo build --release --target=x86_64-unknown-linux-musl
+      - mv target/x86_64-unknown-linux-musl/release/grpc-ffmpeg-client ../../grpc-ffmpeg-client-amd64
+
+      # Build for arm64
+      - PATH="/usr/local/bin:$PATH" cargo build --release --target=aarch64-unknown-linux-musl
+      - mv target/aarch64-unknown-linux-musl/release/grpc-ffmpeg-client ../../grpc-ffmpeg-client-arm64
+
+      - ls -l ../../grpc-ffmpeg-client-amd64 ../../grpc-ffmpeg-client-arm64
+
+  - name: publish_release
+    image: woodpeckerci/plugin-release
+    secrets:
+      - GITHUB_TOKEN # This secret must be configured in Woodpecker for the plugin-release
+    settings:
+      files:
+        - 'grpc-ffmpeg-client-amd64'
+        - 'grpc-ffmpeg-client-arm64'
+      api_key:
+        from_secret: GITHUB_TOKEN
+      note: "Automated release by Woodpecker CI for $${WOODPECKER_TAG}" # Use a template variable
+      prerelease: false # Or true if it's a prerelease tag
+      draft: false # Set to true to create a draft release
+
+when:
+  branch: ${CI_REPO_DEFAULT_BRANCH}
+  event: tag
