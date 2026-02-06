@@ -21,8 +21,7 @@ use std::env;
 use std::io::{self, Write};
 use std::time::Duration;
 use tokio::time::sleep;
-use tonic::transport::Channel; // Keep Channel from tonic::transport
-use tonic_tls::{ClientTlsConfig, Identity, Certificate}; // Import ClientTlsConfig, Identity, and Certificate from tonic_tls
+use tonic::transport::{Certificate, Channel, ClientTlsConfig, Uri};
 use tonic::metadata::MetadataValue;
 use tonic::Request;
 
@@ -124,28 +123,35 @@ async fn run_command(command: String, use_ssl: bool) -> Result<i32, anyhow::Erro
     let grpc_host = env::var("GRPC_HOST").unwrap_or_else(|_| "ffmpeg-workers".to_string());
     let grpc_port = env::var("GRPC_PORT").unwrap_or_else(|_| "50051".to_string());
     // Construct the target URI for the gRPC service.
-    let target = format!("https://{}:{}", grpc_host, grpc_port);
+    let target_str = format!("https://{}:{}", grpc_host, grpc_port);
+    let target_uri: Uri = target_str.parse()?; // Parse target string into a hyper::Uri
 
-    // Retrieve authentication token. It will only be used if SSL is active.
+    // Retrieve authentication token.
     let auth_token = env::var("AUTH_TOKEN").unwrap_or_else(|_| "my_secret_token1".to_string());
     let token: MetadataValue<_> = format!("Bearer {}", auth_token).parse()?;
 
     // Configure the gRPC channel based on SSL settings.
     let channel = if use_ssl {
-        // If SSL is enabled, load the server certificate.
         let cert_path = env::var("CERTIFICATE_PATH").unwrap_or_else(|_| "server.crt".to_string());
         let pem = tokio::fs::read(cert_path).await?;
-        let ca = Certificate::from_pem(pem.to_vec());
-        let tls_config = ClientTlsConfig::new().ca_certificate(ca).identity(None);
-        Channel::from_static(&target) // Use `from_static` for HTTPS targets.
+        let ca = Certificate::from_pem(pem); // tonic::transport::Certificate takes Bytes or Vec<u8>
+        
+        // Ensure the domain name is set for TLS validation.
+        // If GRPC_HOST is an IP address, this might need adjustment in a real scenario.
+        let tls_config = ClientTlsConfig::new()
+            .ca_certificate(ca)
+            .domain_name(grpc_host);
+
+        Channel::builder(target_uri.clone()) // Use Channel::builder with Uri
             .tls_config(tls_config)?
             .connect()
-            .await?
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to gRPC endpoint {}. Is the server running and reachable? Original error: {}", target_str, e))?
     } else {
-        // If SSL is disabled, use an insecure channel.
-        Channel::from_shared(target.replace("https://", "http://"))? // Replace https with http for insecure.
+        Channel::builder(target_uri) // Use Channel::builder with Uri
             .connect()
-            .await?
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to connect to gRPC endpoint {}. Is the server running and reachable? Original error: {}", target_str.replace("https", "http"), e))?
     };
     
     // Retry mechanism parameters.
@@ -155,10 +161,13 @@ async fn run_command(command: String, use_ssl: bool) -> Result<i32, anyhow::Erro
     // Loop for retrying the gRPC call.
     for attempt in 0..max_retries {
         // Create a gRPC client with an interceptor to add the authorization header.
-        // The token is now sent regardless of SSL status, as per user's request.
-        let mut client = FFmpegServiceClient::with_interceptor(channel.clone(), move |mut req: Request<()>| {
-            req.metadata_mut().insert("authorization", token.clone());
-            Ok(req)
+        // The token is now sent regardless of SSL status.
+        let mut client = FFmpegServiceClient::with_interceptor(channel.clone(), {
+            let token = token.clone(); // Clone token here, outside the move closure for each iteration
+            move |mut req: Request<()>| {
+                req.metadata_mut().insert("authorization", token.clone());
+                Ok(req)
+            }
         });
 
         // Create the gRPC request with the command string.

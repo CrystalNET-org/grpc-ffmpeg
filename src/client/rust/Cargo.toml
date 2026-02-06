@@ -5,12 +5,12 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-tonic = "0.14" # Removed features = ["tls", "tls-roots"]
-tonic-tls = "0.6" # Add tonic-tls for TLS functionality
-prost = "0.12"
-anyhow = "1.0"
+tonic = { version = "0.14.2", features = ["tls-ring"] } 
+prost = "0.14.2"
+tonic-prost = { version = "0.14.2" } 
+anyhow = "1"
 thiserror = "1.0"
 clap = { version = "4.4", features = ["derive"] }
 
 [build-dependencies]
-tonic-prost-build = "0.14"
+tonic-prost-build = "0.14.2" # Match tonic version
