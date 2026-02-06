@@ -102,7 +102,7 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                     i += 1 # Move to first path part
                     
                     path_parts = []
-                    while i < len(tokens) and not tokens[i].startswith('-'):
+                    while i < len(tokens) and (not tokens[i].startswith('-') or tokens[i] == '-'):
                         path_parts.append(tokens[i])
                         i += 1
                     
@@ -118,6 +118,9 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         except Exception as e:
             logger.warning(f"Path joining heuristic failed: {e}, using original tokens.")
 
+        # Determine if stdout is binary based on command flags
+        is_binary_stdout = "-f chromaprint" in command
+
         if "ffmpeg" in tokens[0] and HEALTHCHECK_FILE not in tokens:
             ffmpeg_process_gauge.inc()
 
@@ -126,12 +129,17 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                 *tokens, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
 
-            async def read_stream(stream, response_type, stream_name):
+            async def read_stream(stream, response_type, stream_name, force_binary=False):
                 while True:
                     line = await stream.readline()
                     if not line:
                         break
                     
+                    if force_binary:
+                        logger.info(f'Sending binary data on {stream_name}')
+                        yield response_type(binary_output=line, stream=stream_name)
+                        continue
+
                     try:
                         # Try to decode as UTF-8 to see if it's text
                         decoded_line = line.decode('utf-8')
@@ -142,11 +150,13 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                         logger.info(f'Sending binary data on {stream_name}')
                         yield response_type(binary_output=line, stream=stream_name)
 
+            # Process stdout, checking if it should be treated as binary
             async for response in read_stream(
-                process.stdout, ffmpeg_pb2.CommandResponse, "stdout"
+                process.stdout, ffmpeg_pb2.CommandResponse, "stdout", force_binary=is_binary_stdout
             ):
                 yield response
 
+            # Process stderr, which is always text
             async for response in read_stream(
                 process.stderr, ffmpeg_pb2.CommandResponse, "stderr"
             ):
