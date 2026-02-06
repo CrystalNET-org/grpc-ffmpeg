@@ -15,8 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	// Assuming the generated proto files will be in the same directory or properly imported
-	ffmpeg "grpc-ffmpeg/src/client/go" // This will be the actual import path once generated
+	ffmpeg "grpc-ffmpeg-client"
 )
 
 const (
