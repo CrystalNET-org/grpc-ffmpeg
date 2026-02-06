@@ -11,11 +11,11 @@ steps:
       - apt-get update && apt-get install -y curl unzip musl-tools gcc-aarch64-linux-gnu
       - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-$${PROTOC_VERSION}-linux-x86_64.zip
       - unzip protoc-$${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
-      - rustup target add x86_64-unknown-linux-musl
       - cd src/client/rust
+      - rustup target add x86_64-unknown-linux-musl
       - PATH="/usr/local/bin:$PATH" cargo build --release --target=x86_64-unknown-linux-musl
       - mv target/x86_64-unknown-linux-musl/release/grpc-ffmpeg-client ./grpc-ffmpeg-client-amd64
-      - rustup target add aarch64-unknown-linux-musl
-      - PATH="/usr/local/bin:$PATH" cargo build --release --target=aarch64-unknown-linux-musl
-      - mv target/aarch64-unknown-linux-musl/release/grpc-ffmpeg-client ./grpc-ffmpeg-client-arm64
+      - rustup target add aarch64-unknown-linux-gnu
+      - PATH="/usr/local/bin:$PATH" cargo build --release --target=aarch64-unknown-linux-gnu
+      - mv target/aarch64-unknown-linux-gnu/release/grpc-ffmpeg-client ./grpc-ffmpeg-client-arm64
       - ls -l ./grpc-ffmpeg-client-amd64 ./grpc-ffmpeg-client-arm64
