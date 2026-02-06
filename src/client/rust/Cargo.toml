@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
-tonic = { version = "0.14", features = ["tls", "tls-roots"] }
+tonic = "0.14" # Removed features = ["tls", "tls-roots"]
+tonic-tls = "0.6" # Add tonic-tls for TLS functionality
 prost = "0.12"
 anyhow = "1.0"
 thiserror = "1.0"

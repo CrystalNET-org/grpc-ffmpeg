@@ -21,7 +21,8 @@ use std::env;
 use std::io::{self, Write};
 use std::time::Duration;
 use tokio::time::sleep;
-use tonic::transport::{Certificate, Channel, ClientTlsConfig};
+use tonic::transport::Channel; // Keep Channel from tonic::transport
+use tonic_tls::{ClientTlsConfig, Identity, Certificate}; // Import ClientTlsConfig, Identity, and Certificate from tonic_tls
 use tonic::metadata::MetadataValue;
 use tonic::Request;
 
@@ -134,8 +135,8 @@ async fn run_command(command: String, use_ssl: bool) -> Result<i32, anyhow::Erro
         // If SSL is enabled, load the server certificate.
         let cert_path = env::var("CERTIFICATE_PATH").unwrap_or_else(|_| "server.crt".to_string());
         let pem = tokio::fs::read(cert_path).await?;
-        let ca = Certificate::from_pem(pem);
-        let tls_config = ClientTlsConfig::new().ca_certificate(ca);
+        let ca = Certificate::from_pem(pem.to_vec());
+        let tls_config = ClientTlsConfig::new().ca_certificate(ca).identity(None);
         Channel::from_static(&target) // Use `from_static` for HTTPS targets.
             .tls_config(tls_config)?
             .connect()
