@@ -26,7 +26,7 @@ steps:
 
       # Download Go modules and generate go.sum
       - go mod tidy
-      - go mod edit -replace=internal/ffmpegpb=./ffmpegpb
+      - go mod edit -replace=grpc-ffmpeg/ffmpegpb=./ffmpegpb
 
       # Build the Go client executable
       - go build -o grpc-ffmpeg-client .
