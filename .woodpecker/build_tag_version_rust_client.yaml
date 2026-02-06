@@ -26,8 +26,6 @@ steps:
 
   - name: publish_release
     image: woodpeckerci/plugin-release
-    secrets:
-      - GITHUB_TOKEN # This secret must be configured in Woodpecker for the plugin-release
     settings:
       files:
         - 'grpc-ffmpeg-client-amd64'
