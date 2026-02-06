@@ -1,7 +1,5 @@
 syntax = "proto3";
 
-option go_package = "grpc-ffmpeg/ffmpegpb;ffmpegpb";
-
 package ffmpeg;
 
 service FFmpegService {
