@@ -341,7 +341,8 @@ async def main():
         await ffmpeg_server()
     except asyncio.CancelledError:
         logger.info("Main task canceled.")
-        raise
+        # Do not re-raise, as this is an expected part of shutdown
+        pass
 
 
 if __name__ == "__main__":
