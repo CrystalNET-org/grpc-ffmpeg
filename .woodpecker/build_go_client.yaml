@@ -3,8 +3,11 @@ steps:
     name: build-go-client
     image: golang:latest
     commands:
-      # Install protoc and grpc-tools
-      - apt-get update && apt-get install -y protobuf-compiler grpc-tools
+      # Install specific protoc version for consistency with server
+      - PROTOC_VERSION=33.2
+      - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip
+      - unzip protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
+      - export PATH=$PATH:/usr/local/bin
       # Install Go protobuf plugins
       - go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
       - go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
