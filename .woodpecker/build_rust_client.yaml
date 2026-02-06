@@ -4,7 +4,7 @@ when:
 
 steps:
   - name: build
-    image: rust:1.73
+    image: rust:1.93
     environment:
       PROTOC_VERSION: 33.2
     commands:
