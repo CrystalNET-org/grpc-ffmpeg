@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = "grpc-ffmpeg-client/ffmpegpb";
+option go_package = "internal/ffmpegpb";
 
 package ffmpeg;
 
