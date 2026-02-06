@@ -4,7 +4,7 @@ services:
   grpc-server:
     image: grpc-ffmpeg-server:latest
     build:
-      context: .
+      context: ../.. # Go up two directories to the project root
       dockerfile: docker/Dockerfile.server
     container_name: grpc_ffmpeg_server
     ports:
@@ -21,7 +21,7 @@ services:
   grpc-client:
     image: grpc-ffmpeg-client:latest
     build:
-      context: .
+      context: ../.. # Go up two directories to the project root
       dockerfile: docker/Dockerfile.client
     container_name: grpc_ffmpeg_client
     environment:
