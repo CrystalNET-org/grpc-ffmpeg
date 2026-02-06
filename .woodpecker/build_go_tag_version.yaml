@@ -16,7 +16,7 @@ steps:
       - PROTOC_GO_PLUGIN_PATH=$(go env GOPATH)/bin/protoc-gen-go
       - PROTOC_GRPC_PLUGIN_PATH=$(go env GOPATH)/bin/protoc-gen-go-grpc
       - mkdir -p src/client/go/ffmpegpb
-      - protoc --plugin=protoc-gen-go=$${PROTOC_GO_PLUGIN_PATH} --go_out=src/client/go/ffmpegpb --go_opt=paths=source_relative --plugin=protoc-gen-go-grpc=$${PROTOC_GRPC_PLUGIN_PATH} --go-grpc_out=src/client/go/ffmpegpb --go-grpc_opt=paths=source_relative src/proto/ffmpeg.proto
+      - protoc --plugin=protoc-gen-go=$${PROTOC_GO_PLUGIN_PATH} --go_out=src/client/go/ffmpegpb --plugin=protoc-gen-go-grpc=$${PROTOC_GRPC_PLUGIN_PATH} --go-grpc_out=src/client/go/ffmpegpb src/proto/ffmpeg.proto
 
       # Navigate to the Go client directory
       - cd src/client/go
