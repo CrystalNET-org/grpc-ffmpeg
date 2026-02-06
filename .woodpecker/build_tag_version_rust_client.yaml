@@ -11,7 +11,7 @@ steps:
 
       # Add Rust targets and configure linker for aarch64
       - rustup target add x86_64-unknown-linux-musl
-      - rustup target add aarch64-unknown-linux-musl
+      - rustup target add aarch64-unknown-linux-gnu
       - cd src/client/rust
 
       # Build for amd64
@@ -19,8 +19,8 @@ steps:
       - mv target/x86_64-unknown-linux-musl/release/grpc-ffmpeg-client ../../grpc-ffmpeg-client-amd64
 
       # Build for arm64
-      - PATH="/usr/local/bin:$PATH" cargo build --release --target=aarch64-unknown-linux-musl
-      - mv target/aarch64-unknown-linux-musl/release/grpc-ffmpeg-client ../../grpc-ffmpeg-client-arm64
+      - PATH="/usr/local/bin:$PATH" cargo build --release --target=aarch64-unknown-linux-gnu
+      - mv target/aarch64-unknown-linux-gnu/release/grpc-ffmpeg-client ../../grpc-ffmpeg-client-arm64
 
       - ls -l ../../grpc-ffmpeg-client-amd64 ../../grpc-ffmpeg-client-arm64
 
