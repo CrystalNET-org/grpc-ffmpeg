@@ -322,7 +322,15 @@ async def shutdown(signame):
             task.process.terminate()
         else:
             task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True, timeout=5)
+    
+    try:
+        await asyncio.wait_for(
+            asyncio.gather(*tasks, return_exceptions=True),
+            timeout=5
+        )
+    except asyncio.TimeoutError:
+        logger.warning("Shutdown timed out.")
+        
     logger.info("Shutdown complete.")
 
 
