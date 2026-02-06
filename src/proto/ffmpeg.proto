@@ -1,6 +1,23 @@
 syntax = "proto3";
 
+option go_package = "./;ffmpeg";
+
 package ffmpeg;
+
+service FFmpegService {
+  rpc ExecuteCommand (CommandRequest) returns (stream CommandResponse);
+}
+
+message CommandRequest {
+  string command = 1;
+}
+
+message CommandResponse {
+  string output = 1;
+  int32 exit_code = 2;
+  string stream = 3; // "stdout", "stderr", or "exit_code"
+  bytes binary_output = 4;
+}
 
 service FFmpegService {
   rpc ExecuteCommand (CommandRequest) returns (stream CommandResponse);
