@@ -1,6 +1,6 @@
 syntax = "proto3";
 
-option go_package = "src/client/go";
+option go_package = "src/client/go/ffmpegpb";
 
 package ffmpeg;
 
