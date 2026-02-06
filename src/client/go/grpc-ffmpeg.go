@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
-	ffmpeg "src/client/go/ffmpegpb"
+	ffmpeg "grpc-ffmpeg-client/ffmpegpb"
 )
 
 const (
