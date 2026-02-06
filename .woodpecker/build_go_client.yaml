@@ -6,8 +6,8 @@ steps:
       PROTOC_VERSION: 33.2
     commands:
       - apt-get update && apt-get install -y unzip
-      - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-x86_64.zip
-      - unzip protoc-${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
+      - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-$${PROTOC_VERSION}-linux-x86_64.zip
+      - unzip protoc-$${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
       - export PATH=$PATH:/usr/local/bin
       # Install Go protobuf plugins
       - go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
