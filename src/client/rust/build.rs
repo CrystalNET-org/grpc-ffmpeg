@@ -1,9 +1,4 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::configure()
-        .build_server(false)
-        .compile(
-            &["../../proto/ffmpeg.proto"],
-            &["../../proto/"],
-        )?;
+    tonic_build::compile_protos("../../proto/ffmpeg.proto")?;
     Ok(())
 }
