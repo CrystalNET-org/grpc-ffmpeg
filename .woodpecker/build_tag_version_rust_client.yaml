@@ -28,8 +28,8 @@ steps:
     image: woodpeckerci/plugin-release
     settings:
       files:
-        - 'grpc-ffmpeg-client-amd64'
-        - 'grpc-ffmpeg-client-arm64'
+        - 'src/grpc-ffmpeg-client-amd64'
+        - 'src/grpc-ffmpeg-client-arm64'
       api_key:
         from_secret: GITHUB_TOKEN
       note: "Automated release by Woodpecker CI for $${WOODPECKER_TAG}" # Use a template variable
