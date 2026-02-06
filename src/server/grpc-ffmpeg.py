@@ -97,15 +97,23 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
             i = 0
             while i < len(tokens):
                 token = tokens[i]
-                new_tokens.append(token)
-                i += 1
-                if token == '-i' and i < len(tokens):
-                    path_parts = [tokens[i]]
-                    i += 1
+                if token == '-i' and i + 1 < len(tokens):
+                    new_tokens.append(token) # Add '-i'
+                    i += 1 # Move to first path part
+                    
+                    path_parts = []
                     while i < len(tokens) and not tokens[i].startswith('-'):
                         path_parts.append(tokens[i])
                         i += 1
-                    new_tokens.append(' '.join(path_parts))
+                    
+                    if path_parts:
+                        new_tokens.append(' '.join(path_parts))
+                    
+                    # Now `i` is at the next flag or at the end.
+                    # The outer loop will continue from here.
+                else:
+                    new_tokens.append(token)
+                    i += 1
             tokens = new_tokens
         except Exception as e:
             logger.warning(f"Path joining heuristic failed: {e}, using original tokens.")
