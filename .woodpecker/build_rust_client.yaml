@@ -12,6 +12,10 @@ steps:
       - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-$${PROTOC_VERSION}-linux-x86_64.zip
       - unzip protoc-$${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
       - rustup target add x86_64-unknown-linux-musl
+      - rustup target add aarch64-unknown-linux-musl
       - cd src/client/rust
       - PATH="/usr/local/bin:$PATH" cargo build --release --target=x86_64-unknown-linux-musl
-      - mv target/x86_64-unknown-linux-musl/release/grpc-ffmpeg-client /usr/local/bin/
+      - mv target/x86_64-unknown-linux-musl/release/grpc-ffmpeg-client ./grpc-ffmpeg-client-amd64
+      - PATH="/usr/local/bin:$PATH" cargo build --release --target=aarch64-unknown-linux-musl
+      - mv target/aarch64-unknown-linux-musl/release/grpc-ffmpeg-client ./grpc-ffmpeg-client-arm64
+      - ls -l ./grpc-ffmpeg-client-amd64 ./grpc-ffmpeg-client-arm64
