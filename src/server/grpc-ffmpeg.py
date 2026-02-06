@@ -305,8 +305,7 @@ async def ffmpeg_server():
         raise
 
 
-def handle_signals():
-    loop = asyncio.get_event_loop()
+def handle_signals(loop):
     for signame in {"SIGINT", "SIGTERM"}:
         loop.add_signal_handler(
             getattr(signal, signame), lambda: asyncio.create_task(shutdown(signame))
@@ -328,6 +327,8 @@ async def shutdown(signame):
 
 
 async def main():
+    loop = asyncio.get_running_loop()
+    handle_signals(loop)
     try:
         await ffmpeg_server()
     except asyncio.CancelledError:
@@ -336,7 +337,6 @@ async def main():
 
 
 if __name__ == "__main__":
-    handle_signals()
     try:
         asyncio.run(main())
         sys.exit(0)  # Exit with 0 on successful shutdown
