@@ -29,9 +29,6 @@ steps:
       # Build the Go client executable with version information
       - go build -ldflags="-X main.version=${CI_COMMIT_TAG}" -o grpc-ffmpeg-client .
 
-    when:
-      event: tag
-
   # Upload the built binary to GitHub Release
   github-release:
     image: woodpeckerci/plugin-release # Use a suitable version
@@ -49,5 +46,7 @@ steps:
         ## grpc-ffmpeg-client release ${CI_COMMIT_TAG}
 
         This release includes the `grpc-ffmpeg-client` binary.
-    when:
-      event: tag
+
+when:
+  branch: ${CI_REPO_DEFAULT_BRANCH}
+  event: tag

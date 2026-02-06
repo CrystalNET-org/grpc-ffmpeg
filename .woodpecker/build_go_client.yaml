@@ -28,3 +28,6 @@ steps:
 
       # Build the Go client executable
       - go build -o grpc-ffmpeg-client .
+when:
+  branch: ${CI_REPO_DEFAULT_BRANCH}
+  event: push
