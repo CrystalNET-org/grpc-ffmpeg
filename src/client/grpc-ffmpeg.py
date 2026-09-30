@@ -53,13 +53,17 @@ def load_config(argv0):
     """Settings from the config file, overridden by environment variables."""
     config = dict(DEFAULTS)
     path = config_file(argv0)
+    file_values = {}
     if path:
         try:
             with open(path, encoding="utf-8") as f:
-                config.update({k: v for k, v in parse_config(f.read()).items() if v})
+                file_values = parse_config(f.read())
         except OSError:
             pass
-    config.update({k: os.environ[k] for k in DEFAULTS if os.environ.get(k)})
+    config.update({k: v for k, v in file_values.items() if v})
+    # Set environment variables override the file, even when empty (= default)
+    config.update({k: os.environ[k] or DEFAULTS[k] for k in DEFAULTS if k in os.environ})
+    config["AUTH_TOKEN_SET"] = bool(os.environ.get("AUTH_TOKEN") or file_values.get("AUTH_TOKEN"))
     return config
 
 # Detect a dead server on long-running, quiet streams. The interval matches
@@ -203,6 +207,8 @@ async def run_command(args, config):
                 if e.code() == grpc.StatusCode.UNAVAILABLE and config["FALLBACK_DIR"]:
                     raise Unreachable() from e
                 sys.stderr.write(f"gRPC error after {attempt + 1} attempts: {e.code().name}: {e.details()}\n")
+                if e.code() == grpc.StatusCode.UNAUTHENTICATED and not config["AUTH_TOKEN_SET"]:
+                    sys.stderr.write("AUTH_TOKEN is not set, so the default token was sent\n")
                 return 1
             except Exception as e:
                 sys.stderr.write(f"An unexpected error occurred: {e}\n")

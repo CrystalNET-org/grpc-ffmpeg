@@ -126,7 +126,11 @@ def is_authorized(context):
             continue
         if value.startswith("Bearer "):
             value = value[len("Bearer "):]
-        return hmac.compare_digest(value.encode(), VALID_TOKEN.encode())
+        if hmac.compare_digest(value.encode(), VALID_TOKEN.encode()):
+            return True
+        logger.warning(f"Rejected call from {context.peer()}: wrong token")
+        return False
+    logger.warning(f"Rejected call from {context.peer()}: no token sent")
     return False
 
 

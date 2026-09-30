@@ -57,6 +57,8 @@ struct Config {
     use_ssl: bool,
     certificate_path: String,
     auth_token: String,
+    /// Whether AUTH_TOKEN was configured, rather than the default being used.
+    auth_token_set: bool,
     fallback_dir: Option<PathBuf>,
     retries: u32,
     connect_timeout: Duration,
@@ -82,6 +84,7 @@ impl Config {
             port: get_or("GRPC_PORT", "50051"),
             use_ssl: get_or("USE_SSL", "false").eq_ignore_ascii_case("true"),
             certificate_path: get_or("CERTIFICATE_PATH", "server.crt"),
+            auth_token_set: get("AUTH_TOKEN").is_some(),
             auth_token: get_or("AUTH_TOKEN", "my_secret_token1"),
             fallback_dir: get("FALLBACK_DIR").map(PathBuf::from),
             retries: get("RETRIES").and_then(|v| v.parse().ok()).unwrap_or(5).max(1),
@@ -325,6 +328,11 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
             result.code(),
             result.message()
         );
+        if result.code() == tonic::Code::Unauthenticated && !config.auth_token_set {
+            // e.g. a broken secret reference; easy to miss as callers like
+            // Jellyfin do not show ffmpeg's stderr
+            eprintln!("AUTH_TOKEN is not set, so the default token was sent");
+        }
         return Ok(Outcome::Exited(1));
     }
 }
