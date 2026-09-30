@@ -9,7 +9,7 @@ steps:
       # renovate: datasource=github-releases depName=protocolbuffers/protobuf extractVersion=^v(?<version>.*)$
       PROTOC_VERSION: "36.2"
     commands:
-      - apt-get update && apt-get install -y curl unzip clang llvm
+      - apt-get update && apt-get install -y curl unzip clang llvm python3-pip
       - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-$${PROTOC_VERSION}-linux-x86_64.zip
       - unzip protoc-$${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
       - cd src/client/rust
@@ -20,4 +20,9 @@ steps:
       - mv target/x86_64-unknown-linux-musl/release/grpc-ffmpeg-client ./grpc-ffmpeg-client-amd64
       - PATH="/usr/local/bin:$PATH" cargo build --locked --release --target=aarch64-unknown-linux-musl
       - mv target/aarch64-unknown-linux-musl/release/grpc-ffmpeg-client ./grpc-ffmpeg-client-arm64
-      - ls -l ./grpc-ffmpeg-client-amd64 ./grpc-ffmpeg-client-arm64
+      # Windows: zig provides the C compiler and linker (and the MinGW headers/libs)
+      - pip3 install --break-system-packages ziglang cargo-zigbuild
+      - rustup target add x86_64-pc-windows-gnu
+      - PATH="/usr/local/bin:$PATH" cargo zigbuild --locked --release --target=x86_64-pc-windows-gnu
+      - mv target/x86_64-pc-windows-gnu/release/grpc-ffmpeg-client.exe ./grpc-ffmpeg-client-windows-amd64.exe
+      - ls -l ./grpc-ffmpeg-client-amd64 ./grpc-ffmpeg-client-arm64 ./grpc-ffmpeg-client-windows-amd64.exe
