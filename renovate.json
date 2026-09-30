@@ -1,3 +1,26 @@
 {
-  "$schema": "https://docs.renovatebot.com/renovate-schema.json"
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Versions annotated with a '# renovate:' comment",
+      "managerFilePatterns": ["/(^|/)\\.woodpecker/[^/]+\\.ya?ml$/", "/(^|/)Dockerfile[^/]*$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)( versioning=(?<versioning>\\S+))?( extractVersion=(?<extractVersion>\\S+))?\\s+(ARG |ENV )?[A-Z_]+[:=] ?\"?(?<currentValue>[^\"\\s]+)\"?"
+      ]
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Generated stubs must match the grpcio runtime",
+      "matchPackageNames": ["grpcio", "grpcio-tools"],
+      "groupName": "grpc"
+    },
+    {
+      "description": "The image installs the jellyfin-ffmpeg7 package; 8.x targets unreleased Jellyfin versions",
+      "matchPackageNames": ["jellyfin/jellyfin-ffmpeg"],
+      "allowedVersions": "<8"
+    }
+  ]
 }

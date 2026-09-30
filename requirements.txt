@@ -1,6 +1,7 @@
-grpcio
-grpcio-tools
-aiofiles
-aiohttp
-pymediainfo
-prometheus_client
+# Runtime dependencies of the server (and the Python client).
+# Keep grpcio in sync with grpcio-tools in requirements-build.txt.
+grpcio==1.84.0
+protobuf==7.36.2
+aiohttp==3.14.3
+pymediainfo==7.0.1
+prometheus_client==0.26.0

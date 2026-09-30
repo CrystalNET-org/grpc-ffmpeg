@@ -3,8 +3,6 @@ kind: DaemonSet
 metadata:
   name: ffmpeg-worker
 spec:
-  podManagementPolicy: OrderedReady
-  replicas: 3
   revisionHistoryLimit: 3
 
   selector:
@@ -12,11 +10,9 @@ spec:
       app.kubernetes.io/instance: ffmpeg-worker
       app.kubernetes.io/name: ffmpeg-worker
 
-  serviceName: ffmpeg-worker
-
   updateStrategy:
     rollingUpdate:
-      partition: 0
+      maxUnavailable: 1
     type: RollingUpdate
 
   template:
@@ -29,7 +25,8 @@ spec:
         prometheus.io/path: '/metrics'
         prometheus.io/port: '8080'
     spec:   
-      terminationGracePeriodSeconds: 5
+      # SHUTDOWN_GRACE_PERIOD (5s) for in-flight commands + time to stop them
+      terminationGracePeriodSeconds: 15
       
       nodeSelector:
         node-role.kubernetes.io/worker: worker
@@ -139,7 +136,3 @@ spec:
           medium: Memory
           sizeLimit: 1Gi
         name: log
-
-  persistentVolumeClaimRetentionPolicy:
-    whenDeleted: Retain
-    whenScaled: Retain

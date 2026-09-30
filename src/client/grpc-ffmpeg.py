@@ -4,7 +4,10 @@ import ffmpeg_pb2
 import ffmpeg_pb2_grpc
 import asyncio
 import os
+import shlex
+import signal
 import sys
+import threading
 
 # Configuration
 CERTIFICATE_PATH = os.getenv("CERTIFICATE_PATH", "server.crt")
@@ -12,39 +15,102 @@ AUTH_TOKEN = os.getenv("AUTH_TOKEN", "my_secret_token1")
 GRPC_HOST = os.getenv("GRPC_HOST", "ffmpeg-workers")
 GRPC_PORT = os.getenv("GRPC_PORT", "50051")
 USE_SSL = os.getenv("USE_SSL", "false").lower() == "true"
-# Add any params here that need quoting on their values
-parameters_to_quote = ["-filter_complex", "-vf", "-hls_segment_filename", "-user_agent"]
+
+# Detect a dead server on long-running, quiet streams. The interval matches
+# the minimum gRPC servers accept by default, so older servers (which do not
+# relax that limit) will not reject the pings.
+CHANNEL_OPTIONS = [
+    ("grpc.keepalive_time_ms", 300_000),
+    ("grpc.keepalive_timeout_ms", 20_000),
+    ("grpc.http2.max_pings_without_data", 0),
+]
 
 
-async def run_command(command, use_ssl):
+RETRYABLE_CODES = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.RESOURCE_EXHAUSTED)
+STDIN_CHUNK_SIZE = 64 * 1024
+
+
+def start_stdin_reader():
+    """Read stdin on a daemon thread (a blocking read cannot be cancelled) into
+    a bounded queue shared by all attempts. b"" marks EOF."""
+    loop = asyncio.get_running_loop()
+    queue = asyncio.Queue(maxsize=16)
+
+    def reader():
+        while True:
+            try:
+                data = os.read(sys.stdin.fileno(), STDIN_CHUNK_SIZE)
+            except (OSError, ValueError):
+                data = b""
+            try:
+                asyncio.run_coroutine_threadsafe(queue.put(data), loop).result()
+            except RuntimeError:
+                return  # Event loop is gone
+            if not data:
+                return
+
+    threading.Thread(target=reader, daemon=True).start()
+    return queue
+
+
+async def execute_requests(request, stdin_queue):
+    """Request stream for Execute: the command, then stdin data. Returning
+    half-closes the call, which closes the remote process's stdin."""
+    yield ffmpeg_pb2.ExecuteRequest(request=request)
+    while True:
+        data = await stdin_queue.get()
+        if not data:
+            stdin_queue.put_nowait(b"")  # Keep EOF visible to later attempts
+            return
+        yield ffmpeg_pb2.ExecuteRequest(stdin=data)
+
+
+def create_channel(use_ssl):
     target = f"{GRPC_HOST}:{GRPC_PORT}"
     if use_ssl:
         with open(CERTIFICATE_PATH, "rb") as f:
             trusted_certs = f.read()
         credentials = grpc.ssl_channel_credentials(root_certificates=trusted_certs)
-        call_credentials = grpc.metadata_call_credentials(
-            lambda context, callback: callback((("authorization", AUTH_TOKEN),), None)
-        )
-        composite_credentials = grpc.composite_channel_credentials(
-            credentials, call_credentials
-        )
-        channel = grpc.aio.secure_channel(target, composite_credentials)
-    else:
-        channel = grpc.aio.insecure_channel(target)
+        return grpc.aio.secure_channel(target, credentials, options=CHANNEL_OPTIONS)
+    return grpc.aio.insecure_channel(target, options=CHANNEL_OPTIONS)
 
-    exit_code = 0  # Default exit code
+
+async def run_command(args, use_ssl):
+    # `command` is for servers that predate the `args` field
+    request = ffmpeg_pb2.CommandRequest(
+        command=shlex.join(args), args=args, raw_stderr=True
+    )
+    # Sent as plain metadata so the token also works without SSL
+    metadata = (("authorization", AUTH_TOKEN),)
+
+    stdin_queue = start_stdin_reader()
+    # Servers without the Execute RPC do not support stdin forwarding
+    forward_stdin = True
+
+    exit_code = 1  # Stays 1 if the server never reports an exit code
     max_retries = 5
     base_delay = 1.0
+    attempt = 0
 
-    for attempt in range(max_retries):
-        try:
-            async with channel:
-                stub = ffmpeg_pb2_grpc.FFmpegServiceStub(channel)
-                request = ffmpeg_pb2.CommandRequest(command=command)
-                async for response in stub.ExecuteCommand(request):
+    while True:
+        received_response = False
+        # A new connection per attempt, so behind a load balancer a retry can
+        # land on a different worker
+        async with create_channel(use_ssl) as channel:
+            stub = ffmpeg_pb2_grpc.FFmpegServiceStub(channel)
+            try:
+                if forward_stdin:
+                    call = stub.Execute(
+                        execute_requests(request, stdin_queue), metadata=metadata
+                    )
+                else:
+                    call = stub.ExecuteCommand(request, metadata=metadata)
+                async for response in call:
+                    received_response = True
                     if response.binary_output:
-                        sys.stdout.buffer.write(response.binary_output)
-                        sys.stdout.flush()
+                        out = sys.stderr if response.stream == "stderr" else sys.stdout
+                        out.buffer.write(response.binary_output)
+                        out.buffer.flush()
                     elif response.output:
                         if response.stream == "stdout":
                             sys.stdout.write(response.output)
@@ -54,89 +120,42 @@ async def run_command(command, use_ssl):
                             sys.stderr.flush()
                     elif response.stream == "exit_code":
                         exit_code = response.exit_code
-                
-                return exit_code # Success
+                return exit_code
 
-        except grpc.aio.AioRpcError as e:
-            if e.code() == grpc.StatusCode.UNAVAILABLE and attempt < max_retries - 1:
-                delay = base_delay * (2 ** attempt)
-                sys.stderr.write(f"Server unavailable, retrying in {delay:.1f} seconds... (Attempt {attempt + 1}/{max_retries})\n")
-                await asyncio.sleep(delay)
-                continue
-            else:
-                sys.stderr.write(f"gRPC error after {attempt + 1} attempts: {e.details()}\n")
-                return 1 # Non-retryable error or max retries reached
-        except Exception as e:
-            sys.stderr.write(f"An unexpected error occurred: {e}\n")
-            return 1
-
-    sys.stderr.write("Command failed after reaching max retries.\n")
-    return 1
-
-
-def handle_quoted_arguments(command_args):
-    """
-    Handles the quoting and reassembly of specific arguments like -i file: and -filter_complex.
-    - Quotes the file path for the -i file: argument if it contains spaces or special characters.
-    - Quotes the entire filter complex string if it contains spaces, commas, or colons.
-    """
-    chars_that_need_quoting = [" ", ",", ":", "(", ")"]
-    rffmpeg_command = []
-    i = 0
-
-    while i < len(command_args):
-        arg = command_args[i]
-
-        # Handle -i file: argument separately
-        if (
-            arg == "-i"
-            and i + 1 < len(command_args)
-            and command_args[i + 1].startswith("file:")
-        ):
-            file_path_arg = command_args[i + 1]
-            file_path = file_path_arg[len("file:") :]  # Extract the actual file path
-
-            # Quote the file path if it contains spaces or special characters
-            if any(char in file_path for char in chars_that_need_quoting):
-                file_path = f'"{file_path}"'
-
-            # Reassemble the -i file: argument
-            rffmpeg_command.append(arg)
-            rffmpeg_command.append(f"file:{file_path}")
-            i += 2  # Skip the next argument as it's part of -i file:
-
-        # Handle arguments in the parameters_to_quote list
-        elif arg in parameters_to_quote and i + 1 < len(command_args):
-            next_arg = command_args[i + 1]
-
-            # Quote the argument value if it contains spaces, commas, or colons
-            if any(char in next_arg for char in chars_that_need_quoting):
-                next_arg = f'"{next_arg}"'
-
-            rffmpeg_command.append(arg)
-            rffmpeg_command.append(next_arg)
-            i += 2  # Skip the next argument as it's part of this argument set
-
-        # Append any other arguments as is
-        else:
-            rffmpeg_command.append(arg)
-            i += 1
-
-    return rffmpeg_command
+            except grpc.aio.AioRpcError as e:
+                if received_response:
+                    # Re-running a partially streamed command would duplicate its output
+                    sys.stderr.write(f"gRPC stream failed: {e.code().name}: {e.details()}\n")
+                    return 1
+                if forward_stdin and e.code() == grpc.StatusCode.UNIMPLEMENTED:
+                    forward_stdin = False
+                    continue
+                if e.code() in RETRYABLE_CODES and attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    reason = "Server unavailable" if e.code() == grpc.StatusCode.UNAVAILABLE else "Server busy"
+                    sys.stderr.write(f"{reason}, retrying in {delay:.1f} seconds... (Attempt {attempt + 1}/{max_retries})\n")
+                    await asyncio.sleep(delay)
+                    attempt += 1
+                    continue
+                sys.stderr.write(f"gRPC error after {attempt + 1} attempts: {e.code().name}: {e.details()}\n")
+                return 1
+            except Exception as e:
+                sys.stderr.write(f"An unexpected error occurred: {e}\n")
+                return 1
 
 
 if __name__ == "__main__":
+    # Busybox style: the name this script is invoked as (e.g. a symlink named
+    # "ffmpeg" or "ffprobe") is the remote binary to run.
     script_name = os.path.basename(sys.argv[0])
-    # Get the command line arguments
-    command_args = sys.argv[1:]
-
-    # Process and reassemble the arguments
-    rffmpeg_command = handle_quoted_arguments(command_args)
-
-    command = [script_name] + rffmpeg_command
-    # Convert the list to a single command string
-    command_str = " ".join(command)
-
-    # Run the command and handle exit code
-    exit_code = asyncio.run(run_command(command_str, USE_SSL))
+    exit_code = asyncio.run(run_command([script_name] + sys.argv[1:], USE_SSL))
+    if exit_code < 0:
+        # The remote process was killed by a signal; die the same way so the
+        # caller sees the same status as for a local process.
+        try:
+            signal.signal(-exit_code, signal.SIG_DFL)
+        except (OSError, ValueError):
+            pass  # SIGKILL/SIGSTOP always have their default action
+        os.kill(os.getpid(), -exit_code)
+        exit_code = 128 - exit_code
     sys.exit(exit_code)

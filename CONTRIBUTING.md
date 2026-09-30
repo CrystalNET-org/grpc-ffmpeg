@@ -1,5 +1,3 @@
-Here's a well-structured `CONTRIBUTING.md` file for the `grpc-ffmpeg` project:
-
 # Contributing to grpc-ffmpeg
 
 Thank you for your interest in contributing to the `grpc-ffmpeg` project! We welcome contributions of all kinds, including bug reports, feature requests, code contributions, documentation updates, and more.
@@ -28,7 +26,7 @@ To make the contribution process smooth, please follow these guidelines.
    git clone https://github.com/YOUR_USERNAME/grpc-ffmpeg.git
    cd grpc-ffmpeg
    ```
-3. Set up the development environment by following the [Setup Guide](docs/BUILDING.md).
+3. Set up the development environment by following the [Setup Guide](doc/BUILDING.md).
 
 ---
 

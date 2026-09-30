@@ -23,5 +23,6 @@ docker run -p 50051:50051 -p 8080:8080 grpc-ffmpeg-server
 ### Running the Client
 
 ```bash
-python src/client/grpc-ffmpeg.py <ffmpeg_command>
+ln -s "$PWD/src/client/grpc-ffmpeg.py" /usr/local/bin/ffmpeg
+ffmpeg <ffmpeg arguments>
 ```

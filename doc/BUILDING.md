@@ -8,7 +8,7 @@ This guide explains how to build and set up the `grpc-ffmpeg` project on your lo
 
 Before building the project, ensure you have the following installed:
 
-1. **Python** (3.7 or later)
+1. **Python** (3.10 or later)
 2. **FFmpeg** (latest version)
 3. **Docker** (optional, for containerized setup)
 4. **Protocol Buffers Compiler** (`protoc`)
@@ -42,7 +42,7 @@ source venv/bin/activate  # On Linux/MacOS
 Install the required Python packages using `pip`:
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-build.txt
 ```
 
 ### 4. Compile Protocol Buffers
@@ -62,9 +62,8 @@ Create a .env file in the project root.
 Example .env file:
 
 ```env
-FFMPEG_PATH=/usr/bin/ffmpeg
 SSL_CERT_PATH=/path/to/ssl/cert.pem
-AUTH_TOKEN=your_auth_token_here
+VALID_TOKEN=your_auth_token_here
 ```
 
 ### 6. Build and Run the Project
@@ -72,13 +71,13 @@ AUTH_TOKEN=your_auth_token_here
 To run the server locally:
 
 ```bash
-python src/server/server.py
+python src/server/grpc-ffmpeg.py
 ```
 
 To run the client:
 
 ```bash
-python src/client/client.py
+ln -s "$PWD/src/client/grpc-ffmpeg.py" /usr/local/bin/ffmpeg && ffmpeg -version
 ```
 
 #### 6.2 Running with Docker
@@ -95,7 +94,7 @@ docker run -it --rm grpc-ffmpeg-client
 Alternatively, use Docker Compose:
 
 ```bash
-docker-compose -f example_deployment/docker_compose/docker-compose.yml up --build
+docker-compose -f example_deployment/compose/docker-compose.yml up --build
 ```
 
 ## Troubleshooting
@@ -105,7 +104,7 @@ If you encounter missing dependencies, update pip and reinstall:
 
 ```bash
 pip install --upgrade pip
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements-build.txt
 ```
 
 ### Protocol Buffers Compilation Errors

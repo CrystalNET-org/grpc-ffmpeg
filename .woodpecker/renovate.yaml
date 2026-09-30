@@ -1,13 +1,13 @@
 clone:
   git:
-    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-git:2.6.0
+    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-git:2.10.1
     settings:
       partial: false
       depth: 1
 
 steps:
   renovate:
-    image: harbor.crystalnet.org/dockerhub-proxy/renovate/renovate:39.26.3
+    image: harbor.crystalnet.org/dockerhub-proxy/renovate/renovate:44.125.2
     environment:
       GITHUB_COM_TOKEN:
           from_secret: github_com_token

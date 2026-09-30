@@ -1,31 +1,31 @@
 steps:
   - name: build_binaries
-    image: rust:1.93
+    image: rust:1.98
     environment:
-      PROTOC_VERSION: 33.2
+      # renovate: datasource=github-releases depName=protocolbuffers/protobuf extractVersion=^v(?<version>.*)$
+      PROTOC_VERSION: "36.2"
     commands:
       # Install build tools and protobuf compiler
-      - apt-get update && apt-get install -y curl unzip musl-tools gcc-aarch64-linux-gnu
+      - apt-get update && apt-get install -y curl unzip clang llvm
       - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-$${PROTOC_VERSION}-linux-x86_64.zip
       - unzip protoc-$${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
 
-      # Add Rust targets and configure linker for aarch64
-      - rustup target add x86_64-unknown-linux-musl
-      - rustup target add aarch64-unknown-linux-gnu
+      # Both binaries are fully static (musl); see src/client/rust/.cargo/config.toml
+      - rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
       - cd src/client/rust
 
       # Build for amd64
-      - PATH="/usr/local/bin:$PATH" cargo build --release --target=x86_64-unknown-linux-musl
+      - PATH="/usr/local/bin:$PATH" cargo build --locked --release --target=x86_64-unknown-linux-musl
       - mv target/x86_64-unknown-linux-musl/release/grpc-ffmpeg-client ../../grpc-ffmpeg-client-amd64
 
       # Build for arm64
-      - PATH="/usr/local/bin:$PATH" cargo build --release --target=aarch64-unknown-linux-gnu
-      - mv target/aarch64-unknown-linux-gnu/release/grpc-ffmpeg-client ../../grpc-ffmpeg-client-arm64
+      - PATH="/usr/local/bin:$PATH" cargo build --locked --release --target=aarch64-unknown-linux-musl
+      - mv target/aarch64-unknown-linux-musl/release/grpc-ffmpeg-client ../../grpc-ffmpeg-client-arm64
 
       - ls -l ../../grpc-ffmpeg-client-amd64 ../../grpc-ffmpeg-client-arm64
 
   - name: publish_release
-    image: woodpeckerci/plugin-release
+    image: woodpeckerci/plugin-release:0.3.2
     settings:
       files:
         - 'src/grpc-ffmpeg-client-amd64'
