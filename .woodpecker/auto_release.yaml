@@ -1,0 +1,21 @@
+# Tags a release when a push to main changes the bundled jellyfin-ffmpeg
+# version (e.g. an automerged Renovate update); the tag pipelines then build
+# and publish the worker image and the client binaries.
+when:
+  - event: push
+    branch: ${CI_REPO_DEFAULT_BRANCH}
+    path: docker/Dockerfile.server
+
+steps:
+  - name: tag-release
+    image: alpine/git:v2.54.0
+    environment:
+      GITHUB_TOKEN:
+        from_secret: GITHUB_TOKEN
+    commands:
+      - git fetch --tags --force origin
+      - TAG=$(sh scripts/next-release-tag.sh)
+      - if [ -z "$TAG" ]; then echo "jellyfin-ffmpeg unchanged since the last release, nothing to tag"; exit 0; fi
+      - echo "Tagging $${CI_COMMIT_SHA} as $TAG"
+      - git tag "$TAG" "$${CI_COMMIT_SHA}"
+      - git push "https://x-access-token:$${GITHUB_TOKEN}@github.com/$${CI_REPO}.git" "refs/tags/$TAG"

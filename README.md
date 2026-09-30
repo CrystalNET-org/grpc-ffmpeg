@@ -195,6 +195,24 @@ cd src/client/rust && cargo build --release
 A Python client with the same behaviour is available in `src/client/grpc-ffmpeg.py`. It needs
 Python 3.10+ and the packages in `requirements.txt`.
 
+## Releases
+
+Release tags are `<upstream jellyfin-ffmpeg version>-<our version>`, e.g. `7.1.4-7.5` for
+jellyfin-ffmpeg `7.1.4-3`. Our version's minor number increases with every release. A tag
+builds and publishes the worker image and the client binaries.
+
+New jellyfin-ffmpeg versions are released automatically:
+
+1. Renovate opens a PR that updates `JELLYFIN_FFMPEG_VERSION`, 6 hours after the upstream
+   release (7.x only).
+2. The PR pipeline test-builds the worker image, and Renovate merges the PR once it and the
+   other checks pass.
+3. On `main`, `.woodpecker/auto_release.yaml` notices that the bundled jellyfin-ffmpeg
+   version differs from the latest release, and pushes the next tag
+   (`scripts/next-release-tag.sh`).
+
+Other changes are released by pushing a tag by hand, following the same scheme.
+
 ## Repository layout
 
 ```
@@ -209,6 +227,7 @@ grpc-ffmpeg/
 ├── example_deployment/          # Kubernetes and docker compose examples
 ├── doc/                         # build and run instructions
 ├── .woodpecker/                 # CI pipelines
+├── scripts/                     # release helpers
 ├── requirements.txt             # Python runtime dependencies
 └── requirements-build.txt       # Python stub generation (grpcio-tools)
 ```
