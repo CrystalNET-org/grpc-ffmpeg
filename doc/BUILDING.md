@@ -8,7 +8,7 @@ This guide explains how to build and set up the `grpc-ffmpeg` project on your lo
 
 Before building the project, ensure you have the following installed:
 
-1. **Python** (3.7 or later)
+1. **Python** (3.10 or later)
 2. **FFmpeg** (latest version)
 3. **Docker** (optional, for containerized setup)
 4. **Protocol Buffers Compiler** (`protoc`)
