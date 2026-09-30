@@ -32,18 +32,30 @@ Shared tmp directories between the client and worker containers (for jellyfin th
 
 ### Environment Variables
 
-The following environment variables can be set to configure the server and client:
+#### Server
 
-- `VALID_TOKEN`: The authentication token for the gRPC server (default: `my_secret_token`).
-- `ALLOWED_BINARIES`: The binaries allowed to be executed (default: `['ffmpeg', 'ffprobe', 'vainfo']`).
-- `BINARY_PATH_PREFIX`: The path prefix for the binaries (default: `/usr/bin/`).
+- `VALID_TOKEN`: Authentication token clients must send. When set, calls without a matching token are rejected with `UNAUTHENTICATED`; when unset, authentication is disabled (a warning is logged).
+- `BINARY_PATH_PREFIX`: The path prefix for the binaries (default: `/usr/lib/jellyfin-ffmpeg/`). Only `ffmpeg`, `ffprobe`, `mediainfo` and `vainfo` may be executed.
+- `USE_SSL`: Whether to use SSL (default: `false`).
 - `SSL_KEY_PATH`: The path to the SSL key file (default: `server.key`).
 - `SSL_CERT_PATH`: The path to the SSL certificate file (default: `server.crt`).
-- `USE_SSL`: Whether to use SSL (default: `false`).
+- `GRPC_PORT`: gRPC listen port (default: `50051`).
+- `HTTP_PORT`: Port for `/health` and `/metrics` (default: `8080`).
+- `SHUTDOWN_GRACE_PERIOD`: Seconds in-flight commands get to finish on shutdown before they are terminated (default: `5`).
+- `HEALTHCHECK_INTERVAL` / `HEALTHCHECK_TIMEOUT`: Health check interval and timeout in seconds (default: `60` / `60`).
+- `LOG_LEVEL`: Python log level (default: `INFO`; `DEBUG` logs ffmpeg's stderr).
+
+If a client disconnects (for example because Jellyfin stopped a transcode), the server terminates the corresponding ffmpeg process.
+
+#### Client
+
 - `GRPC_HOST`: The hostname for the gRPC client to connect to (default: `ffmpeg-workers`).
 - `GRPC_PORT`: The port for the gRPC client to connect to (default: `50051`).
+- `USE_SSL`: Whether to use SSL (default: `false`).
 - `CERTIFICATE_PATH`: The path to the SSL certificate for the client (default: `server.crt`).
-- `AUTH_TOKEN`: The authentication token for the client (default: `my_secret_token1`).
+- `AUTH_TOKEN`: The authentication token for the client (default: `my_secret_token1`). Must match the server's `VALID_TOKEN`.
+
+The client runs the binary it is invoked as, so install it (or symlink it) under the names `ffmpeg` and `ffprobe`.
 
 ### Example Usage
 
@@ -67,7 +79,8 @@ Send a command to the server with SSL:
 export USE_SSL=true
 export CERTIFICATE_PATH=/path/to/server.crt
 export AUTH_TOKEN=my_secret_token1
-python src/client/grpc-ffmpeg.py "ffmpeg -i input.mp4 output.mp4"
+ln -s "$PWD/src/client/grpc-ffmpeg.py" /usr/local/bin/ffmpeg
+ffmpeg -i input.mp4 output.mp4
 ```
 
 ### License
