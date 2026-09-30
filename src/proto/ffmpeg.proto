@@ -12,6 +12,10 @@ message CommandRequest {
   string command = 1;
   // Exact argv (binary name first). Avoids any quoting round-trip.
   repeated string args = 2;
+  // Send stderr unmodified in `binary_output` (with stream "stderr") instead
+  // of as UTF-8 text in `output`. Only for clients that route binary_output
+  // by `stream`; older clients write all binary_output to stdout.
+  bool raw_stderr = 3;
 }
 
 message CommandResponse {

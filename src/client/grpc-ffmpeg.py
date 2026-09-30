@@ -5,6 +5,7 @@ import ffmpeg_pb2_grpc
 import asyncio
 import os
 import shlex
+import signal
 import sys
 
 # Configuration
@@ -36,7 +37,9 @@ def create_channel(use_ssl):
 
 async def run_command(args, use_ssl):
     # `command` is for servers that predate the `args` field
-    request = ffmpeg_pb2.CommandRequest(command=shlex.join(args), args=args)
+    request = ffmpeg_pb2.CommandRequest(
+        command=shlex.join(args), args=args, raw_stderr=True
+    )
     # Sent as plain metadata so the token also works without SSL
     metadata = (("authorization", AUTH_TOKEN),)
 
@@ -52,8 +55,9 @@ async def run_command(args, use_ssl):
                 async for response in stub.ExecuteCommand(request, metadata=metadata):
                     received_response = True
                     if response.binary_output:
-                        sys.stdout.buffer.write(response.binary_output)
-                        sys.stdout.buffer.flush()
+                        out = sys.stderr if response.stream == "stderr" else sys.stdout
+                        out.buffer.write(response.binary_output)
+                        out.buffer.flush()
                     elif response.output:
                         if response.stream == "stdout":
                             sys.stdout.write(response.output)
@@ -92,4 +96,13 @@ if __name__ == "__main__":
     # "ffmpeg" or "ffprobe") is the remote binary to run.
     script_name = os.path.basename(sys.argv[0])
     exit_code = asyncio.run(run_command([script_name] + sys.argv[1:], USE_SSL))
+    if exit_code < 0:
+        # The remote process was killed by a signal; die the same way so the
+        # caller sees the same status as for a local process.
+        try:
+            signal.signal(-exit_code, signal.SIG_DFL)
+        except (OSError, ValueError):
+            pass  # SIGKILL/SIGSTOP always have their default action
+        os.kill(os.getpid(), -exit_code)
+        exit_code = 128 - exit_code
     sys.exit(exit_code)

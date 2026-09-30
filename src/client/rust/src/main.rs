@@ -101,6 +101,7 @@ async fn run_command(args: Vec<String>, use_ssl: bool) -> Result<i32, anyhow::Er
         let request = Request::new(CommandRequest {
             command: command.clone(),
             args: args.clone(),
+            raw_stderr: true,
         });
 
         let result = match client.execute_command(request).await {
@@ -153,9 +154,15 @@ async fn stream_output(
     let mut next = Some(first);
     while let Some(res) = next {
         if !res.binary_output.is_empty() {
-            let mut stdout = io::stdout().lock();
-            stdout.write_all(&res.binary_output)?;
-            stdout.flush()?;
+            if res.stream == "stderr" {
+                let mut stderr = io::stderr().lock();
+                stderr.write_all(&res.binary_output)?;
+                stderr.flush()?;
+            } else {
+                let mut stdout = io::stdout().lock();
+                stdout.write_all(&res.binary_output)?;
+                stdout.flush()?;
+            }
         } else if !res.output.is_empty() {
             match res.stream.as_str() {
                 "stdout" => {
@@ -213,12 +220,26 @@ async fn main() {
 
     // Execute the remote command and exit with the received exit code.
     match run_command(full_command, use_ssl).await {
+        Ok(exit_code) if exit_code < 0 => exit_by_signal(-exit_code),
         Ok(exit_code) => std::process::exit(exit_code),
         Err(e) => {
             eprintln!("An unexpected error occurred: {}", e);
             std::process::exit(1);
         }
     }
+}
+
+/// The remote process was killed by a signal; die the same way so the caller
+/// sees the same status as for a local process.
+fn exit_by_signal(signal: i32) -> ! {
+    // SAFETY: resetting a signal to its default action and raising it has no
+    // memory-safety preconditions.
+    unsafe {
+        libc::signal(signal, libc::SIG_DFL);
+        libc::raise(signal);
+    }
+    // Not reached for fatal signals; mirror the shell's convention otherwise.
+    std::process::exit(128 + signal)
 }
 
 #[cfg(test)]

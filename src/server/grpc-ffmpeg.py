@@ -171,15 +171,15 @@ def stop_process_detached(process):
     return task
 
 
-async def pump_stream(stream, stream_name, queue):
+async def pump_stream(stream, stream_name, queue, raw):
     """Forward a subprocess pipe to the response queue in chunks.
 
-    stdout is forwarded as raw bytes so binary output (e.g. -f chromaprint or
-    pipe:1) arrives unmodified. stderr is decoded incrementally so multi-byte
-    characters split across reads are not mangled.
+    Raw streams are forwarded byte for byte in binary_output. Otherwise (stderr
+    for clients that only understand text) the output is decoded incrementally
+    so multi-byte characters split across reads are not mangled.
     """
     decoder = None
-    if stream_name == "stderr":
+    if not raw:
         decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
     try:
         while True:
@@ -187,6 +187,7 @@ async def pump_stream(stream, stream_name, queue):
             if decoder is None:
                 if not chunk:
                     break
+                logger.debug(f"{stream_name}: {chunk!r}")
                 await queue.put(
                     ffmpeg_pb2.CommandResponse(binary_output=chunk, stream=stream_name)
                 )
@@ -266,8 +267,10 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
             # ffmpeg's progress output (stderr) until stdout is closed.
             queue = asyncio.Queue(maxsize=STREAM_QUEUE_SIZE)
             pumps = [
-                asyncio.create_task(pump_stream(process.stdout, "stdout", queue)),
-                asyncio.create_task(pump_stream(process.stderr, "stderr", queue)),
+                asyncio.create_task(pump_stream(process.stdout, "stdout", queue, True)),
+                asyncio.create_task(
+                    pump_stream(process.stderr, "stderr", queue, request.raw_stderr)
+                ),
             ]
             open_streams = len(pumps)
             while open_streams:
