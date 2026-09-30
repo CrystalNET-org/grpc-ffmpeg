@@ -1,2 +1,18 @@
-[target.aarch64-unknown-linux-gnu]
-linker = "aarch64-linux-gnu-gcc"
+# Fully static release binaries for both architectures, built the same way:
+# clang compiles the C/assembly parts of dependencies (ring) for the target and
+# the rust-lld linker shipped with rustc links against Rust's bundled musl.
+# Needs: clang, llvm (llvm-ar), and `rustup target add <target>`.
+
+[target.x86_64-unknown-linux-musl]
+linker = "rust-lld"
+
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+
+[env]
+CC_x86_64_unknown_linux_musl = "clang"
+CFLAGS_x86_64_unknown_linux_musl = "--target=x86_64-unknown-linux-musl"
+AR_x86_64_unknown_linux_musl = "llvm-ar"
+CC_aarch64_unknown_linux_musl = "clang"
+CFLAGS_aarch64_unknown_linux_musl = "--target=aarch64-unknown-linux-musl"
+AR_aarch64_unknown_linux_musl = "llvm-ar"

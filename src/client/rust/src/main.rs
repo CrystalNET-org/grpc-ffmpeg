@@ -9,6 +9,9 @@
 //! quotes or other special characters reach the remote FFmpeg unchanged. A
 //! shell-quoted command string is sent alongside for older servers.
 //!
+//! The client's stdin is forwarded to the remote process, so e.g. the "q"
+//! Jellyfin writes to stop ffmpeg gracefully works as with a local ffmpeg.
+//!
 //! Configuration is primarily done through environment variables:
 //! - `GRPC_HOST`: Hostname or IP of the gRPC server (default: "ffmpeg-workers")
 //! - `GRPC_PORT`: Port of the gRPC server (default: "50051")
@@ -16,9 +19,12 @@
 //! - `CERTIFICATE_PATH`: Path to the server's TLS certificate if `USE_SSL` is "true" (default: "server.crt")
 //! - `AUTH_TOKEN`: Bearer token for authentication (default: "my_secret_token1")
 
+use futures_util::stream::{self, Stream, StreamExt};
 use std::env;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
 use tonic::metadata::MetadataValue;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Uri};
@@ -26,7 +32,7 @@ use tonic::Request;
 
 // Import the generated protobuf and gRPC service definitions.
 use ffmpeg::f_fmpeg_service_client::FFmpegServiceClient;
-use ffmpeg::CommandRequest;
+use ffmpeg::{CommandRequest, ExecuteRequest};
 
 /// The `ffmpeg` module contains the generated Rust code from `ffmpeg.proto`.
 pub mod ffmpeg {
@@ -77,34 +83,93 @@ async fn build_channel(use_ssl: bool) -> Result<Channel, anyhow::Error> {
     Ok(endpoint.connect_lazy())
 }
 
+/// Local stdin, read on a background thread and shared by all attempts.
+type StdinReceiver = Arc<Mutex<mpsc::Receiver<Vec<u8>>>>;
+
+/// Reads stdin on a dedicated thread (a blocking read cannot be cancelled)
+/// and forwards it with backpressure. EOF closes the channel.
+fn spawn_stdin_reader() -> StdinReceiver {
+    let (tx, rx) = mpsc::channel::<Vec<u8>>(16);
+    std::thread::spawn(move || {
+        let mut stdin = io::stdin().lock();
+        let mut buf = vec![0u8; 64 * 1024];
+        loop {
+            match stdin.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if tx.blocking_send(buf[..n].to_vec()).is_err() {
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+    });
+    Arc::new(Mutex::new(rx))
+}
+
+/// The request stream for `Execute`: the command, followed by stdin data.
+/// The stream ends (half-closing the call) when stdin reaches EOF.
+fn execute_requests(
+    request: CommandRequest,
+    stdin: StdinReceiver,
+) -> impl Stream<Item = ExecuteRequest> + Send + 'static {
+    let first = ExecuteRequest {
+        request: Some(request),
+        stdin: Vec::new(),
+    };
+    stream::once(async move { first }).chain(stream::unfold(stdin, |stdin| async move {
+        let data = stdin.lock().await.recv().await?;
+        Some((
+            ExecuteRequest {
+                request: None,
+                stdin: data,
+            },
+            stdin,
+        ))
+    }))
+}
+
 /// Executes the command on the remote server and returns its exit code.
 ///
-/// Retries with exponential backoff while the server is unavailable, but only
-/// until the command has started: re-running a partially streamed command
-/// would duplicate its output.
+/// Retries with exponential backoff while the server is unavailable or all
+/// its ffmpeg slots are busy, but only until the command has started:
+/// re-running a partially streamed command would duplicate its output. Each
+/// attempt opens a new connection, so behind a load balancer a retry can land
+/// on a different worker.
 async fn run_command(args: Vec<String>, use_ssl: bool) -> Result<i32, anyhow::Error> {
     let auth_token = env::var("AUTH_TOKEN").unwrap_or_else(|_| "my_secret_token1".to_string());
     let token: MetadataValue<_> = format!("Bearer {}", auth_token).parse()?;
-
-    let channel = build_channel(use_ssl).await?;
-    let mut client = FFmpegServiceClient::with_interceptor(channel, move |mut req: Request<()>| {
+    let auth = move |mut req: Request<()>| {
         req.metadata_mut().insert("authorization", token.clone());
         Ok(req)
-    });
+    };
 
     let command = args.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
+    let stdin = spawn_stdin_reader();
+    // Servers without the Execute RPC do not support stdin forwarding.
+    let mut forward_stdin = true;
 
     let max_retries = 5;
     let base_delay = Duration::from_secs(1);
+    let mut attempt = 0;
 
-    for attempt in 0..max_retries {
-        let request = Request::new(CommandRequest {
+    loop {
+        let channel = build_channel(use_ssl).await?;
+        let mut client = FFmpegServiceClient::with_interceptor(channel, auth.clone());
+        let request = CommandRequest {
             command: command.clone(),
             args: args.clone(),
             raw_stderr: true,
-        });
+        };
 
-        let result = match client.execute_command(request).await {
+        let response = if forward_stdin {
+            client.execute(execute_requests(request, stdin.clone())).await
+        } else {
+            client.execute_command(Request::new(request)).await
+        };
+        let result = match response {
             Ok(response) => {
                 let mut stream = response.into_inner();
                 match stream.message().await {
@@ -120,15 +185,29 @@ async fn run_command(args: Vec<String>, use_ssl: bool) -> Result<i32, anyhow::Er
             Err(status) => status,
         };
 
-        if result.code() == tonic::Code::Unavailable && attempt < max_retries - 1 {
+        if forward_stdin && result.code() == tonic::Code::Unimplemented {
+            forward_stdin = false;
+            continue;
+        }
+        let retryable = matches!(
+            result.code(),
+            tonic::Code::Unavailable | tonic::Code::ResourceExhausted
+        );
+        if retryable && attempt < max_retries - 1 {
             let delay = base_delay * 2u32.pow(attempt as u32);
             eprintln!(
-                "Server unavailable, retrying in {:.1} seconds... (Attempt {}/{})",
+                "{}, retrying in {:.1} seconds... (Attempt {}/{})",
+                if result.code() == tonic::Code::Unavailable {
+                    "Server unavailable"
+                } else {
+                    "Server busy"
+                },
                 delay.as_secs_f32(),
                 attempt + 1,
                 max_retries
             );
             sleep(delay).await;
+            attempt += 1;
             continue;
         }
         eprintln!(
@@ -139,9 +218,6 @@ async fn run_command(args: Vec<String>, use_ssl: bool) -> Result<i32, anyhow::Er
         );
         return Ok(1);
     }
-
-    eprintln!("Command failed after reaching max retries.");
-    Ok(1)
 }
 
 /// Writes the streamed responses to stdout/stderr and returns the exit code.

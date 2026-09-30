@@ -53,7 +53,13 @@ SSL_CERT_PATH = os.getenv("SSL_CERT_PATH", "server.crt")
 USE_SSL = os.getenv("USE_SSL", "false").lower() == "true"
 GRPC_PORT = env_int("GRPC_PORT", 50051)
 HTTP_PORT = env_int("HTTP_PORT", 8080)
+# Max concurrent ffmpeg processes (ffprobe etc. are not limited); further
+# ffmpeg calls wait for a free slot. 0 disables the limit.
 MAX_FFMPEG_WORKERS = env_int("MAX_FFMPEG_WORKERS", 10)
+# Seconds an ffmpeg call may wait for a slot before it is rejected with
+# RESOURCE_EXHAUSTED (clients then retry, possibly on another worker).
+# 0 waits indefinitely.
+FFMPEG_QUEUE_TIMEOUT = env_int("FFMPEG_QUEUE_TIMEOUT", 0)
 # How long to wait for in-flight commands on shutdown before cancelling them
 SHUTDOWN_GRACE_PERIOD = env_int("SHUTDOWN_GRACE_PERIOD", 5)
 # How long a process gets to exit after SIGTERM before it is SIGKILLed
@@ -89,6 +95,8 @@ health_status = {"healthy": False}
 # Background process cleanups that must outlive a cancelled RPC
 _cleanup_tasks = set()
 
+ffmpeg_slots = asyncio.Semaphore(MAX_FFMPEG_WORKERS) if MAX_FFMPEG_WORKERS > 0 else None
+
 # Prometheus metrics
 binary_counters = {
     binary: Counter(f"{binary}_commands", f"Number of {binary} commands executed")
@@ -99,7 +107,14 @@ ffmpeg_process_gauge = Gauge(
 )
 ffmpeg_max_workers_gauge = Gauge(
     "ffmpeg_max_workers",
-    "Configured maximum number of ffmpeg processes (informational, not enforced)",
+    "Maximum number of concurrent ffmpeg processes (0 = unlimited)",
+)
+ffmpeg_queued_gauge = Gauge(
+    "ffmpeg_queued_count", "Number of ffmpeg commands waiting for a free worker slot"
+)
+ffmpeg_rejected_counter = Counter(
+    "ffmpeg_rejected_commands",
+    "Number of ffmpeg commands rejected after waiting FFMPEG_QUEUE_TIMEOUT for a slot",
 )
 
 
@@ -204,11 +219,70 @@ async def pump_stream(stream, stream_name, queue, raw):
     await queue.put(None)
 
 
+async def forward_stdin(messages, stdin):
+    """Write the stdin data of the remaining request messages to the process,
+    closing its stdin once the client half-closes."""
+    try:
+        async for message in messages:
+            if message.stdin:
+                stdin.write(message.stdin)
+                await stdin.drain()
+    except (BrokenPipeError, ConnectionResetError):
+        # The process closed its stdin or exited; nothing left to deliver
+        return
+    except Exception as e:
+        # The call failed or was cancelled; the main handler cleans up
+        logger.debug(f"Stopped forwarding stdin: {e!r}")
+        return
+    try:
+        stdin.close()
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+
+
+async def acquire_ffmpeg_slot(context):
+    if ffmpeg_slots is None:
+        return False
+    if ffmpeg_slots.locked():
+        logger.info(f"All {MAX_FFMPEG_WORKERS} ffmpeg slots busy, queueing command")
+    ffmpeg_queued_gauge.inc()
+    try:
+        if FFMPEG_QUEUE_TIMEOUT > 0:
+            await asyncio.wait_for(ffmpeg_slots.acquire(), FFMPEG_QUEUE_TIMEOUT)
+        else:
+            await ffmpeg_slots.acquire()
+    except asyncio.TimeoutError:
+        ffmpeg_rejected_counter.inc()
+        logger.warning(f"No ffmpeg slot free after {FFMPEG_QUEUE_TIMEOUT}s, rejecting command")
+        await context.abort(
+            grpc.StatusCode.RESOURCE_EXHAUSTED,
+            f"All {MAX_FFMPEG_WORKERS} ffmpeg workers are busy",
+        )
+    finally:
+        ffmpeg_queued_gauge.dec()
+    return True
+
+
 class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
     async def ExecuteCommand(self, request, context):
         if not is_authorized(context):
             await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Invalid token")
+        await self.run(request, context, None)
 
+    async def Execute(self, request_iterator, context):
+        if not is_authorized(context):
+            await context.abort(grpc.StatusCode.UNAUTHENTICATED, "Invalid token")
+        messages = request_iterator.__aiter__()
+        first = await anext(messages, None)
+        if first is None or not first.HasField("request"):
+            await context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT, "The first message must contain the request"
+            )
+        await self.run(first.request, context, messages)
+
+    async def run(self, request, context, stdin_messages):
+        """Run a request. stdin_messages is an async iterator of ExecuteRequest
+        whose stdin data is forwarded to the process, or None for no stdin."""
         try:
             tokens = parse_request(request)
         except ValueError as e:
@@ -238,15 +312,21 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         binary_counters[binary].inc()
 
         is_ffmpeg = binary == "ffmpeg"
+        holds_slot = is_ffmpeg and await acquire_ffmpeg_slot(context)
         if is_ffmpeg:
             ffmpeg_process_gauge.inc()
         process = None
         pumps = []
+        stdin_forwarder = None
         try:
             try:
                 process = await asyncio.create_subprocess_exec(
                     *tokens,
-                    stdin=asyncio.subprocess.DEVNULL,
+                    stdin=(
+                        asyncio.subprocess.DEVNULL
+                        if stdin_messages is None
+                        else asyncio.subprocess.PIPE
+                    ),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
@@ -272,6 +352,10 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                     pump_stream(process.stderr, "stderr", queue, request.raw_stderr)
                 ),
             ]
+            if stdin_messages is not None:
+                stdin_forwarder = asyncio.create_task(
+                    forward_stdin(stdin_messages, process.stdin)
+                )
             open_streams = len(pumps)
             while open_streams:
                 response = await queue.get()
@@ -291,12 +375,16 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         finally:
             for pump in pumps:
                 pump.cancel()
+            if stdin_forwarder is not None:
+                stdin_forwarder.cancel()
             if process is not None and process.returncode is None:
                 # Shield the cleanup so a repeated cancellation cannot leave
                 # an orphaned ffmpeg process behind.
                 await asyncio.shield(stop_process_detached(process))
             if is_ffmpeg:
                 ffmpeg_process_gauge.dec()
+            if holds_slot:
+                ffmpeg_slots.release()
 
 
 class HealthChecker:

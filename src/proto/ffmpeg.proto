@@ -3,7 +3,18 @@ syntax = "proto3";
 package ffmpeg;
 
 service FFmpegService {
+  // Runs a command with stdin closed.
   rpc ExecuteCommand (CommandRequest) returns (stream CommandResponse);
+  // Runs a command and forwards the client's stdin to it (e.g. the "q"
+  // Jellyfin sends to stop ffmpeg gracefully). The first message carries the
+  // request; later messages carry stdin data. Half-closing the request
+  // stream closes the process's stdin.
+  rpc Execute (stream ExecuteRequest) returns (stream CommandResponse);
+}
+
+message ExecuteRequest {
+  CommandRequest request = 1; // first message only
+  bytes stdin = 2;
 }
 
 message CommandRequest {

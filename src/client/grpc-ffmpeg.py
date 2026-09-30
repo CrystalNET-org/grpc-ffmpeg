@@ -7,6 +7,7 @@ import os
 import shlex
 import signal
 import sys
+import threading
 
 # Configuration
 CERTIFICATE_PATH = os.getenv("CERTIFICATE_PATH", "server.crt")
@@ -23,6 +24,45 @@ CHANNEL_OPTIONS = [
     ("grpc.keepalive_timeout_ms", 20_000),
     ("grpc.http2.max_pings_without_data", 0),
 ]
+
+
+RETRYABLE_CODES = (grpc.StatusCode.UNAVAILABLE, grpc.StatusCode.RESOURCE_EXHAUSTED)
+STDIN_CHUNK_SIZE = 64 * 1024
+
+
+def start_stdin_reader():
+    """Read stdin on a daemon thread (a blocking read cannot be cancelled) into
+    a bounded queue shared by all attempts. b"" marks EOF."""
+    loop = asyncio.get_running_loop()
+    queue = asyncio.Queue(maxsize=16)
+
+    def reader():
+        while True:
+            try:
+                data = os.read(sys.stdin.fileno(), STDIN_CHUNK_SIZE)
+            except (OSError, ValueError):
+                data = b""
+            try:
+                asyncio.run_coroutine_threadsafe(queue.put(data), loop).result()
+            except RuntimeError:
+                return  # Event loop is gone
+            if not data:
+                return
+
+    threading.Thread(target=reader, daemon=True).start()
+    return queue
+
+
+async def execute_requests(request, stdin_queue):
+    """Request stream for Execute: the command, then stdin data. Returning
+    half-closes the call, which closes the remote process's stdin."""
+    yield ffmpeg_pb2.ExecuteRequest(request=request)
+    while True:
+        data = await stdin_queue.get()
+        if not data:
+            stdin_queue.put_nowait(b"")  # Keep EOF visible to later attempts
+            return
+        yield ffmpeg_pb2.ExecuteRequest(stdin=data)
 
 
 def create_channel(use_ssl):
@@ -43,16 +83,29 @@ async def run_command(args, use_ssl):
     # Sent as plain metadata so the token also works without SSL
     metadata = (("authorization", AUTH_TOKEN),)
 
+    stdin_queue = start_stdin_reader()
+    # Servers without the Execute RPC do not support stdin forwarding
+    forward_stdin = True
+
     exit_code = 1  # Stays 1 if the server never reports an exit code
     max_retries = 5
     base_delay = 1.0
+    attempt = 0
 
-    async with create_channel(use_ssl) as channel:
-        stub = ffmpeg_pb2_grpc.FFmpegServiceStub(channel)
-        for attempt in range(max_retries):
-            received_response = False
+    while True:
+        received_response = False
+        # A new connection per attempt, so behind a load balancer a retry can
+        # land on a different worker
+        async with create_channel(use_ssl) as channel:
+            stub = ffmpeg_pb2_grpc.FFmpegServiceStub(channel)
             try:
-                async for response in stub.ExecuteCommand(request, metadata=metadata):
+                if forward_stdin:
+                    call = stub.Execute(
+                        execute_requests(request, stdin_queue), metadata=metadata
+                    )
+                else:
+                    call = stub.ExecuteCommand(request, metadata=metadata)
+                async for response in call:
                     received_response = True
                     if response.binary_output:
                         out = sys.stderr if response.stream == "stderr" else sys.stdout
@@ -70,25 +123,25 @@ async def run_command(args, use_ssl):
                 return exit_code
 
             except grpc.aio.AioRpcError as e:
-                # Only retry if the command never started; re-running a
-                # partially streamed command would duplicate its output.
-                if (
-                    e.code() == grpc.StatusCode.UNAVAILABLE
-                    and not received_response
-                    and attempt < max_retries - 1
-                ):
+                if received_response:
+                    # Re-running a partially streamed command would duplicate its output
+                    sys.stderr.write(f"gRPC stream failed: {e.code().name}: {e.details()}\n")
+                    return 1
+                if forward_stdin and e.code() == grpc.StatusCode.UNIMPLEMENTED:
+                    forward_stdin = False
+                    continue
+                if e.code() in RETRYABLE_CODES and attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
-                    sys.stderr.write(f"Server unavailable, retrying in {delay:.1f} seconds... (Attempt {attempt + 1}/{max_retries})\n")
+                    reason = "Server unavailable" if e.code() == grpc.StatusCode.UNAVAILABLE else "Server busy"
+                    sys.stderr.write(f"{reason}, retrying in {delay:.1f} seconds... (Attempt {attempt + 1}/{max_retries})\n")
                     await asyncio.sleep(delay)
+                    attempt += 1
                     continue
                 sys.stderr.write(f"gRPC error after {attempt + 1} attempts: {e.code().name}: {e.details()}\n")
                 return 1
             except Exception as e:
                 sys.stderr.write(f"An unexpected error occurred: {e}\n")
                 return 1
-
-    sys.stderr.write("Command failed after reaching max retries.\n")
-    return 1
 
 
 if __name__ == "__main__":

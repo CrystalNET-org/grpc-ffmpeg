@@ -41,11 +41,15 @@ Shared tmp directories between the client and worker containers (for jellyfin th
 - `SSL_CERT_PATH`: The path to the SSL certificate file (default: `server.crt`).
 - `GRPC_PORT`: gRPC listen port (default: `50051`).
 - `HTTP_PORT`: Port for `/health` and `/metrics` (default: `8080`).
+- `MAX_FFMPEG_WORKERS`: Maximum number of concurrent `ffmpeg` processes (default: `10`, `0` = unlimited). Further `ffmpeg` calls wait for a free slot; `ffprobe`, `mediainfo` and `vainfo` are never limited, so library scans are not held up.
+- `FFMPEG_QUEUE_TIMEOUT`: Seconds an `ffmpeg` call may wait for a free slot before it is rejected (default: `0` = wait indefinitely). Rejected calls are retried by the clients on a new connection, so with several workers behind a load balancer they can land on a less busy one.
 - `SHUTDOWN_GRACE_PERIOD`: Seconds in-flight commands get to finish on shutdown before they are terminated (default: `5`).
 - `HEALTHCHECK_INTERVAL` / `HEALTHCHECK_TIMEOUT`: Health check interval and timeout in seconds (default: `60` / `60`).
 - `LOG_LEVEL`: Python log level (default: `INFO`; `DEBUG` logs ffmpeg's stderr).
 
-If a client disconnects (for example because Jellyfin stopped a transcode), the server terminates the corresponding ffmpeg process.
+The clients behave like a local ffmpeg: stdout and stderr are relayed byte for byte, the exit status (including death by a signal) is passed through, and stdin is forwarded, so Jellyfin's `q` stops a remote transcode gracefully. If a client disconnects (for example because it was killed), the server terminates the corresponding ffmpeg process.
+
+Metrics of note: `ffmpeg_process_count`, `ffmpeg_queued_count`, `ffmpeg_max_workers` and `ffmpeg_rejected_commands_total`.
 
 #### Client
 

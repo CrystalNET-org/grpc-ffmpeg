@@ -4,11 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-tokio = { version = "1.53", features = ["rt", "macros", "fs", "time"] }
+tokio = { version = "1.53", features = ["rt", "macros", "fs", "time", "sync"] }
 tonic = { version = "0.14.6", features = ["tls-ring"] }
 prost = "0.14.4"
 tonic-prost = "0.14.6"
 anyhow = "1"
+futures-util = { version = "0.3", default-features = false }
 libc = "0.2"
 
 [build-dependencies]
