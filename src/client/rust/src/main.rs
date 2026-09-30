@@ -24,6 +24,10 @@
 //!   no worker is reachable (default: none)
 //! - `RETRIES`: Attempts while no worker is reachable or all are busy (default: 5)
 //! - `CONNECT_TIMEOUT`: Seconds to wait for a connection per attempt (default: 10)
+//! - `LOG_FILE`: File or named pipe (FIFO) to write an activity log to: each
+//!   command with its exit code, the client's own messages, and the end of
+//!   ffmpeg's stderr for failed commands (default: none). A FIFO is written
+//!   without blocking; lines are dropped while nobody reads it.
 
 use futures_util::stream::{self, Stream, StreamExt};
 use std::collections::HashMap;
@@ -32,7 +36,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
 use tonic::metadata::MetadataValue;
@@ -50,6 +54,144 @@ pub mod ffmpeg {
 
 const CONFIG_FILE_NAME: &str = "grpc-ffmpeg.conf";
 
+/// Size at which the activity log is rotated to `<file>.1`.
+const LOG_MAX_BYTES: u64 = 1024 * 1024;
+/// How much of ffmpeg's stderr is kept for the activity log.
+const STDERR_TAIL_BYTES: usize = 4096;
+
+/// The activity log (see `LOG_FILE`), set up once in `main`.
+static ACTIVITY_LOG: OnceLock<Option<ActivityLog>> = OnceLock::new();
+/// The end of the remote process's stderr, for the activity log.
+static STDERR_TAIL: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+struct ActivityLog {
+    path: PathBuf,
+    /// "[pid] ffmpeg", so lines of concurrent commands can be told apart.
+    prefix: String,
+}
+
+/// Longest line written to the activity log. Writes of up to PIPE_BUF (4096)
+/// bytes to a FIFO are atomic, so lines of concurrent commands never mix.
+const LOG_MAX_LINE_BYTES: usize = 4000;
+
+/// Appends a line to the activity log, if one is configured. Failures are
+/// ignored: logging must never break or slow down a command.
+fn log_activity(message: &str) {
+    let Some(Some(log)) = ACTIVITY_LOG.get() else {
+        return;
+    };
+    let mut line = format!("{} {} {}", utc_timestamp(), log.prefix, message);
+    if line.len() > LOG_MAX_LINE_BYTES {
+        let mut cut = LOG_MAX_LINE_BYTES - 3;
+        while !line.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        line.truncate(cut);
+        line.push('…');
+    }
+    line.push('\n');
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+        if std::fs::metadata(&log.path).is_ok_and(|m| m.file_type().is_fifo()) {
+            // Non-blocking: fails right away if nobody reads the pipe (ENXIO)
+            // or its buffer is full (EAGAIN); the line is dropped then.
+            if let Ok(mut pipe) = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&log.path)
+            {
+                let _ = pipe.write_all(line.as_bytes());
+            }
+            return;
+        }
+    }
+
+    if std::fs::metadata(&log.path).is_ok_and(|m| m.len() > LOG_MAX_BYTES) {
+        let mut rotated = log.path.clone().into_os_string();
+        rotated.push(".1");
+        let _ = std::fs::rename(&log.path, rotated);
+    }
+    // One write per line in append mode keeps concurrent writers' lines whole
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log.path) {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// Prints a message of the client itself to stderr and the activity log.
+macro_rules! diag {
+    ($($arg:tt)*) => {{
+        let message = format!($($arg)*);
+        eprintln!("{}", message);
+        log_activity(&message);
+    }};
+}
+
+/// Keeps the last `STDERR_TAIL_BYTES` of the remote stderr.
+fn remember_stderr(data: &[u8]) {
+    if !matches!(ACTIVITY_LOG.get(), Some(Some(_))) {
+        return;
+    }
+    let mut tail = STDERR_TAIL.lock().unwrap_or_else(|e| e.into_inner());
+    tail.extend_from_slice(data);
+    let excess = tail.len().saturating_sub(STDERR_TAIL_BYTES);
+    tail.drain(..excess);
+}
+
+/// Logs the last lines of the remote stderr, one log line each.
+fn log_stderr_tail() {
+    let tail = STDERR_TAIL.lock().unwrap_or_else(|e| e.into_inner());
+    let text = String::from_utf8_lossy(&tail);
+    // ffmpeg ends progress lines with \r
+    let lines: Vec<&str> = text
+        .split(['\n', '\r'])
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .collect();
+    for line in &lines[lines.len().saturating_sub(10)..] {
+        log_activity(&format!("  stderr: {}", line));
+    }
+}
+
+/// Current UTC time as "YYYY-MM-DD HH:MM:SS".
+fn utc_timestamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        year,
+        month,
+        day,
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+/// Shortens long command lines (transcodes) for the activity log.
+fn preview(args: &[String]) -> String {
+    const MAX: usize = 400;
+    let line = args.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line,
+    }
+}
+
 /// Client settings.
 struct Config {
     host: String,
@@ -60,6 +202,7 @@ struct Config {
     /// Whether AUTH_TOKEN was configured, rather than the default being used.
     auth_token_set: bool,
     fallback_dir: Option<PathBuf>,
+    log_file: Option<PathBuf>,
     retries: u32,
     connect_timeout: Duration,
 }
@@ -87,6 +230,7 @@ impl Config {
             auth_token_set: get("AUTH_TOKEN").is_some(),
             auth_token: get_or("AUTH_TOKEN", "my_secret_token1"),
             fallback_dir: get("FALLBACK_DIR").map(PathBuf::from),
+            log_file: get("LOG_FILE").map(PathBuf::from),
             retries: get("RETRIES").and_then(|v| v.parse().ok()).unwrap_or(5).max(1),
             connect_timeout: Duration::from_secs(
                 get("CONNECT_TIMEOUT").and_then(|v| v.parse().ok()).unwrap_or(10),
@@ -285,7 +429,7 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
                         return stream_output(first, &mut stream).await.map(Outcome::Exited)
                     }
                     Ok(None) => {
-                        eprintln!("Server closed the stream without reporting an exit code");
+                        diag!("Server closed the stream without reporting an exit code");
                         return Ok(Outcome::Exited(1));
                     }
                     Err(status) => status,
@@ -304,7 +448,7 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
         );
         if retryable && attempt < max_retries - 1 {
             let delay = base_delay * 2u32.pow(attempt);
-            eprintln!(
+            diag!(
                 "{}, retrying in {:.1} seconds... (Attempt {}/{})",
                 if result.code() == tonic::Code::Unavailable {
                     "Server unavailable"
@@ -322,7 +466,7 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
         if result.code() == tonic::Code::Unavailable && config.fallback_dir.is_some() {
             return Ok(Outcome::Unreachable);
         }
-        eprintln!(
+        diag!(
             "gRPC error after {} attempts: {:?}: {}",
             attempt + 1,
             result.code(),
@@ -331,7 +475,7 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
         if result.code() == tonic::Code::Unauthenticated && !config.auth_token_set {
             // e.g. a broken secret reference; easy to miss as callers like
             // Jellyfin do not show ffmpeg's stderr
-            eprintln!("AUTH_TOKEN is not set, so the default token was sent");
+            diag!("AUTH_TOKEN is not set, so the default token was sent");
         }
         return Ok(Outcome::Exited(1));
     }
@@ -346,13 +490,13 @@ fn run_locally(dir: &Path, name: &str, args: &[String]) -> i32 {
         path.set_extension("exe");
     }
     if !path.is_file() {
-        eprintln!(
+        diag!(
             "No worker reachable and no local fallback at {}",
             path.display()
         );
         return 1;
     }
-    eprintln!("No worker reachable, running {} locally", path.display());
+    diag!("No worker reachable, running {} locally", path.display());
     let mut command = Command::new(&path);
     command.args(args);
 
@@ -360,7 +504,7 @@ fn run_locally(dir: &Path, name: &str, args: &[String]) -> i32 {
     {
         use std::os::unix::process::CommandExt;
         let error = command.exec();
-        eprintln!("Failed to run {}: {}", path.display(), error);
+        diag!("Failed to run {}: {}", path.display(), error);
         1
     }
     #[cfg(not(unix))]
@@ -368,7 +512,7 @@ fn run_locally(dir: &Path, name: &str, args: &[String]) -> i32 {
         match command.status() {
             Ok(status) => status.code().unwrap_or(1),
             Err(error) => {
-                eprintln!("Failed to run {}: {}", path.display(), error);
+                diag!("Failed to run {}: {}", path.display(), error);
                 1
             }
         }
@@ -386,6 +530,7 @@ async fn stream_output(
     while let Some(res) = next {
         if !res.binary_output.is_empty() {
             if res.stream == "stderr" {
+                remember_stderr(&res.binary_output);
                 let mut stderr = io::stderr().lock();
                 stderr.write_all(&res.binary_output)?;
                 stderr.flush()?;
@@ -402,6 +547,7 @@ async fn stream_output(
                     stdout.flush()?;
                 }
                 "stderr" => {
+                    remember_stderr(res.output.as_bytes());
                     let mut stderr = io::stderr().lock();
                     stderr.write_all(res.output.as_bytes())?;
                     stderr.flush()?;
@@ -415,7 +561,7 @@ async fn stream_output(
         next = match stream.message().await {
             Ok(message) => message,
             Err(status) => {
-                eprintln!(
+                diag!(
                     "gRPC stream failed: {:?}: {}",
                     status.code(),
                     status.message()
@@ -450,16 +596,35 @@ async fn main() {
     let mut full_command = vec![command_from_exe.clone()];
     full_command.extend(args.iter().cloned());
 
+    let _ = ACTIVITY_LOG.set(config.log_file.clone().map(|path| ActivityLog {
+        path,
+        prefix: format!("[{}] {}", std::process::id(), command_from_exe),
+    }));
+    log_activity(&format!("run: {}", preview(&full_command)));
+    let started = Instant::now();
+
     // Execute the remote command and exit with the received exit code.
     match run_command(full_command, &config).await {
-        Ok(Outcome::Exited(exit_code)) if exit_code < 0 => exit_by_signal(-exit_code),
-        Ok(Outcome::Exited(exit_code)) => std::process::exit(exit_code),
+        Ok(Outcome::Exited(exit_code)) => {
+            log_activity(&format!(
+                "exit {} after {:.1}s",
+                exit_code,
+                started.elapsed().as_secs_f32()
+            ));
+            if exit_code != 0 {
+                log_stderr_tail();
+            }
+            if exit_code < 0 {
+                exit_by_signal(-exit_code)
+            }
+            std::process::exit(exit_code)
+        }
         Ok(Outcome::Unreachable) => {
             let dir = config.fallback_dir.as_deref().unwrap_or(Path::new("."));
             std::process::exit(run_locally(dir, &command_from_exe, &args))
         }
         Err(e) => {
-            eprintln!("An unexpected error occurred: {}", e);
+            diag!("An unexpected error occurred: {}", e);
             std::process::exit(1);
         }
     }

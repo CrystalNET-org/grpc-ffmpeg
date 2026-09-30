@@ -138,6 +138,7 @@ FALLBACK_DIR=/usr/lib/jellyfin-ffmpeg
 | `FALLBACK_DIR` | *(unset)* | Directory with local binaries of the same names (e.g. `/usr/lib/jellyfin-ffmpeg`). If no worker is reachable, the command runs there instead, so Jellyfin keeps working (and keeps starting) while the workers are down. |
 | `RETRIES` | `5` | Attempts, with exponential backoff, while no worker is reachable or all are busy. Lower it when using `FALLBACK_DIR` so the fallback kicks in quickly. |
 | `CONNECT_TIMEOUT` | `10` | Seconds to wait for a connection per attempt (Rust client only). |
+| `LOG_FILE` | *(unset)* | Activity log: one line per command with its exit code and duration, the client's own messages (retries, auth errors, fallback), and the last lines of ffmpeg's stderr for failed commands. Useful because callers like Jellyfin often discard ffmpeg's stderr. A regular file is appended to and rotated at 1 MB. A named pipe (FIFO) is written without blocking, so nothing touches the disk and lines are dropped while nobody reads it. Rust client only. |
 
 ## Behaviour
 
