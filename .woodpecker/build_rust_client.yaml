@@ -8,6 +8,18 @@ steps:
     environment:
       # renovate: datasource=github-releases depName=protocolbuffers/protobuf extractVersion=^v(?<version>.*)$
       PROTOC_VERSION: "36.2"
+      CARGO_BUILD_JOBS: "8"
+    # Cargo runs one compiler per CPU it sees, ~150 MB each, and without a CPU
+    # limit that is every core of the node; bound it so the build fits in memory
+    # (measured: ~0.4 GiB + ~0.15 GiB per job, ~1.6 GiB with 8)
+    backend_options:
+      kubernetes:
+        resources:
+          requests:
+            cpu: "8"
+            memory: 2Gi
+          limits:
+            memory: 3Gi
     commands:
       - apt-get update && apt-get install -y curl unzip clang llvm python3-pip
       - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-$${PROTOC_VERSION}-linux-x86_64.zip
