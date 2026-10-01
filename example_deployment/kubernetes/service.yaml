@@ -1,9 +1,10 @@
+# Address for Jellyfin: ffmpeg-workers:50051 (plugin settings or GRPC_HOST)
 apiVersion: v1
 kind: Service
 metadata:
   name: ffmpeg-workers
 spec:
-  internalTrafficPolicy: Cluster
+  type: ClusterIP
   ports:
   - name: grpc
     port: 50051
@@ -11,4 +12,3 @@ spec:
     targetPort: grpc
   selector:
     app.kubernetes.io/name: ffmpeg-worker
-  type: ClusterIP

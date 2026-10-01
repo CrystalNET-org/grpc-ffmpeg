@@ -85,7 +85,7 @@ container runtime instead of passing `/dev/dri`.
 
 For Kubernetes, [`example_deployment/kubernetes`](example_deployment/kubernetes) has a
 DaemonSet with one worker per GPU node and a Service named `ffmpeg-workers`. Adjust the
-image, GPU resource and volumes to your cluster.
+GPU resource, node selection and volumes to your cluster.
 
 Check that the worker is healthy: `curl http://<worker>:8080/health` returns `200`.
 
