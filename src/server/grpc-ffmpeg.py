@@ -6,6 +6,7 @@ import logging
 import os
 import shlex
 import signal
+import socket
 import sys
 import tempfile
 
@@ -76,7 +77,11 @@ HEALTHCHECK_FILE = os.getenv(
     "HEALTHCHECK_FILE",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "healthcheck.mkv"),
 )
-HEALTHCHECK_OUTPUT = os.path.join(tempfile.gettempdir(), "grpc-ffmpeg-healthcheck.mp4")
+# Unique per worker, in case several workers share a temp directory
+HEALTHCHECK_OUTPUT = os.path.join(
+    tempfile.gettempdir(),
+    f"grpc-ffmpeg-healthcheck-{socket.gethostname()}-{os.getpid()}.mp4",
+)
 
 # Detect dead clients so their ffmpeg processes get cleaned up, keep idle
 # streams alive through NAT/load balancers, and allow client keepalive pings.

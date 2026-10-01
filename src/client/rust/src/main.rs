@@ -21,7 +21,7 @@
 //! - `CERTIFICATE_PATH`: Path to the server's TLS certificate if `USE_SSL` is "true" (default: "server.crt")
 //! - `AUTH_TOKEN`: Bearer token for authentication (default: "my_secret_token1")
 //! - `FALLBACK_DIR`: Directory with local binaries of the same names; used when
-//!   no worker is reachable (default: none)
+//!   no worker is reachable or the token is rejected (default: none)
 //! - `RETRIES`: Attempts while no worker is reachable or all are busy (default: 5)
 //! - `CONNECT_TIMEOUT`: Seconds to wait for a connection per attempt (default: 10)
 //! - `LOG_FILE`: File or named pipe (FIFO) to write an activity log to: each
@@ -69,6 +69,13 @@ struct ActivityLog {
     /// "[pid] ffmpeg", so lines of concurrent commands can be told apart.
     prefix: String,
 }
+
+/// Longest wait between two attempts.
+const MAX_RETRY_DELAY: Duration = Duration::from_secs(5);
+/// After a run found no worker reachable, later runs within this time go to
+/// the fallback right away instead of waiting through the retries again (e.g.
+/// the dozens of ffmpeg calls of Jellyfin's startup while the workers are down).
+const UNREACHABLE_GRACE: Duration = Duration::from_secs(20);
 
 /// Longest line written to the activity log. Writes of up to PIPE_BUF (4096)
 /// bytes to a FIFO are atomic, so lines of concurrent commands never mix.
@@ -291,6 +298,27 @@ fn shell_quote(arg: &str) -> String {
     format!("'{}'", arg.replace('\'', "'\"'\"'"))
 }
 
+/// Marker file whose modification time records when the workers at this
+/// address were last found unreachable.
+fn unreachable_marker(config: &Config) -> PathBuf {
+    let address: String = format!("{}_{}", config.host, config.port)
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect();
+    env::temp_dir().join(format!("grpc-ffmpeg-unreachable-{}", address))
+}
+
+/// How long ago the workers were found unreachable, if within `UNREACHABLE_GRACE`.
+fn recently_unreachable(marker: &Path) -> Option<Duration> {
+    let age = std::fs::metadata(marker).ok()?.modified().ok()?.elapsed().ok()?;
+    (age <= UNREACHABLE_GRACE).then_some(age)
+}
+
+/// Delay before attempt `attempt + 1`: 1s, 2s, 4s, ..., at most `MAX_RETRY_DELAY`.
+fn retry_delay(attempt: u32) -> Duration {
+    (Duration::from_secs(1) * 2u32.saturating_pow(attempt)).min(MAX_RETRY_DELAY)
+}
+
 /// Builds a lazily connecting channel. Connection failures surface as
 /// `Unavailable` on the first call, which lets the retry loop handle a server
 /// that is not up yet.
@@ -379,8 +407,9 @@ fn execute_requests(
 enum Outcome {
     /// The command ran (or failed) remotely with this exit code.
     Exited(i32),
-    /// No worker could be reached; the command never started.
-    Unreachable,
+    /// The command never started remotely and should run on the local
+    /// fallback, for the given reason.
+    Fallback(String),
 }
 
 /// Executes the command on the remote server.
@@ -391,6 +420,16 @@ enum Outcome {
 /// attempt opens a new connection, so behind a load balancer a retry can land
 /// on a different worker.
 async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyhow::Error> {
+    let marker = unreachable_marker(config);
+    if config.fallback_dir.is_some() {
+        if let Some(age) = recently_unreachable(&marker) {
+            return Ok(Outcome::Fallback(format!(
+                "workers unreachable {}s ago",
+                age.as_secs()
+            )));
+        }
+    }
+
     let token: MetadataValue<_> = format!("Bearer {}", config.auth_token).parse()?;
     let auth = move |mut req: Request<()>| {
         req.metadata_mut().insert("authorization", token.clone());
@@ -403,7 +442,6 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
     let mut forward_stdin = true;
 
     let max_retries = config.retries;
-    let base_delay = Duration::from_secs(1);
     let mut attempt = 0;
 
     loop {
@@ -426,7 +464,8 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
                 match stream.message().await {
                     // The command has started; from here on errors are final.
                     Ok(Some(first)) => {
-                        return stream_output(first, &mut stream).await.map(Outcome::Exited)
+                        let _ = std::fs::remove_file(&marker);
+                        return stream_output(first, &mut stream).await.map(Outcome::Exited);
                     }
                     Ok(None) => {
                         diag!("Server closed the stream without reporting an exit code");
@@ -447,7 +486,7 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
             tonic::Code::Unavailable | tonic::Code::ResourceExhausted
         );
         if retryable && attempt < max_retries - 1 {
-            let delay = base_delay * 2u32.pow(attempt);
+            let delay = retry_delay(attempt);
             diag!(
                 "{}, retrying in {:.1} seconds... (Attempt {}/{})",
                 if result.code() == tonic::Code::Unavailable {
@@ -463,8 +502,26 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
             attempt += 1;
             continue;
         }
-        if result.code() == tonic::Code::Unavailable && config.fallback_dir.is_some() {
-            return Ok(Outcome::Unreachable);
+        if result.code() == tonic::Code::Unauthenticated && !config.auth_token_set {
+            // e.g. a broken secret reference; easy to miss as callers like
+            // Jellyfin do not show ffmpeg's stderr
+            diag!("AUTH_TOKEN is not set, so the default token was sent");
+        }
+        if config.fallback_dir.is_some() {
+            match result.code() {
+                tonic::Code::Unavailable => {
+                    let _ = std::fs::write(&marker, b"");
+                    return Ok(Outcome::Fallback("workers unreachable".to_string()));
+                }
+                // A wrong token would otherwise keep Jellyfin from starting
+                tonic::Code::Unauthenticated | tonic::Code::PermissionDenied => {
+                    return Ok(Outcome::Fallback(format!(
+                        "token rejected by the worker: {}",
+                        result.message()
+                    )));
+                }
+                _ => {}
+            }
         }
         diag!(
             "gRPC error after {} attempts: {:?}: {}",
@@ -472,11 +529,6 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
             result.code(),
             result.message()
         );
-        if result.code() == tonic::Code::Unauthenticated && !config.auth_token_set {
-            // e.g. a broken secret reference; easy to miss as callers like
-            // Jellyfin do not show ffmpeg's stderr
-            diag!("AUTH_TOKEN is not set, so the default token was sent");
-        }
         return Ok(Outcome::Exited(1));
     }
 }
@@ -484,19 +536,16 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
 /// Runs the command with the local binary of the same name in `dir`. On Unix
 /// the client process is replaced, so stdin, output, signals and the exit
 /// status behave exactly as if the local binary had been run directly.
-fn run_locally(dir: &Path, name: &str, args: &[String]) -> i32 {
+fn run_locally(dir: &Path, name: &str, args: &[String], reason: &str) -> i32 {
     let mut path = dir.join(name);
     if cfg!(windows) && !path.is_file() {
         path.set_extension("exe");
     }
     if !path.is_file() {
-        diag!(
-            "No worker reachable and no local fallback at {}",
-            path.display()
-        );
+        diag!("fallback ({}): no local {} at {}", reason, name, path.display());
         return 1;
     }
-    diag!("No worker reachable, running {} locally", path.display());
+    diag!("fallback ({}): running {} locally", reason, path.display());
     let mut command = Command::new(&path);
     command.args(args);
 
@@ -619,9 +668,9 @@ async fn main() {
             }
             std::process::exit(exit_code)
         }
-        Ok(Outcome::Unreachable) => {
+        Ok(Outcome::Fallback(reason)) => {
             let dir = config.fallback_dir.as_deref().unwrap_or(Path::new("."));
-            std::process::exit(run_locally(dir, &command_from_exe, &args))
+            std::process::exit(run_locally(dir, &command_from_exe, &args, &reason))
         }
         Err(e) => {
             diag!("An unexpected error occurred: {}", e);
@@ -646,7 +695,17 @@ fn exit_by_signal(signal: i32) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_config, shell_quote};
+    use super::{parse_config, retry_delay, shell_quote, MAX_RETRY_DELAY};
+    use std::time::Duration;
+
+    #[test]
+    fn retry_delay_doubles_up_to_the_maximum() {
+        assert_eq!(retry_delay(0), Duration::from_secs(1));
+        assert_eq!(retry_delay(1), Duration::from_secs(2));
+        assert_eq!(retry_delay(2), Duration::from_secs(4));
+        assert_eq!(retry_delay(3), MAX_RETRY_DELAY);
+        assert_eq!(retry_delay(40), MAX_RETRY_DELAY);
+    }
 
     #[test]
     fn parses_config_file() {

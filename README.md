@@ -81,14 +81,21 @@ release (e.g. `8.1.3-7.8`) and `dev` for the latest build of `main`.
 docker run -d --name ffmpeg-worker \
   -p 50051:50051 -p 8080:8080 \
   -e VALID_TOKEN=change-me \
+  --user 1000:1000 --group-add "$(getent group render | cut -d: -f3)" \
   --device /dev/dri:/dev/dri \
   -v /srv/media:/media \
   -v /srv/jellyfin/cache:/cache \
+  -v /srv/jellyfin/tmp:/tmp/jellyfin \
   ghcr.io/crystalnet-org/ffmpeg-worker:8.1.3-7.8   # or the latest release tag
 ```
 
-Mount the same paths that Jellyfin uses. For NVIDIA GPUs, run the container with the NVIDIA
-container runtime instead of passing `/dev/dri`.
+Mount the same paths that Jellyfin uses, including its temp directory, and run the worker as
+Jellyfin's user (`--user`) so both can work with each other's files. `--group-add` with the
+host's `render` group ID gives that user access to the GPU (the group that owns
+`/dev/dri/renderD*`).
+For NVIDIA GPUs, run the container with the NVIDIA container runtime instead of passing
+`/dev/dri`. The image selects Intel's `iHD` VAAPI driver; for AMD GPUs set
+`LIBVA_DRIVER_NAME=radeonsi`, for older Intel GPUs `LIBVA_DRIVER_NAME=i965`.
 
 For Kubernetes, [`example_deployment/kubernetes`](example_deployment/kubernetes) has a
 DaemonSet with one worker per GPU node and a Service named `ffmpeg-workers`. Adjust the
@@ -176,8 +183,8 @@ file. Environment variables with the same names override the file.
 | `AUTH_TOKEN` | `my_secret_token1` | Token sent to the worker; must match its `VALID_TOKEN`. |
 | `USE_SSL` | `false` | Connect over TLS. |
 | `CERTIFICATE_PATH` | `server.crt` | CA certificate used to verify the worker when `USE_SSL=true`. |
-| `FALLBACK_DIR` | *(unset)* | Directory with local binaries of the same names (e.g. `/usr/lib/jellyfin-ffmpeg`). If no worker is reachable, the command runs there instead, so Jellyfin keeps working, and starting, while the workers are down. |
-| `RETRIES` | `5` | Attempts, with exponential backoff, while no worker is reachable or all are busy. Lower it when using `FALLBACK_DIR` so the fallback kicks in quickly. |
+| `FALLBACK_DIR` | *(unset)* | Directory with local binaries of the same names (e.g. `/usr/lib/jellyfin-ffmpeg`). If no worker is reachable or the worker rejects the token, the command runs there instead, so Jellyfin keeps working, and starting, while the workers are down or misconfigured. |
+| `RETRIES` | `5` | Attempts while no worker is reachable or all are busy, waiting 1, 2, 4 and then 5 seconds between them. Lower it when using `FALLBACK_DIR` so the fallback kicks in quickly. |
 | `CONNECT_TIMEOUT` | `10` | Seconds to wait for a connection per attempt. |
 | `LOG_FILE` | *(unset)* | Activity log: one line per command with its exit code and duration, the client's own messages (retries, authentication errors, fallback), and the last lines of ffmpeg's stderr for failed commands. Useful because callers like Jellyfin often discard ffmpeg's stderr. A regular file is appended to and rotated at 1 MB. A named pipe (FIFO) is written without blocking, so nothing touches the disk and lines are dropped while nobody reads it. |
 
@@ -187,8 +194,11 @@ file. Environment variables with the same names override the file.
   worker terminates the process: SIGTERM first, SIGKILL after 3 seconds. Dead clients are
   detected through HTTP/2 keepalive.
 - **Retries:** clients retry with exponential backoff while the worker is unreachable or busy,
-  but never once a command has started. If no worker was reachable and `FALLBACK_DIR` is set,
-  the command runs locally instead.
+  but never once a command has started.
+- **Fallback:** with `FALLBACK_DIR` set, a command runs locally if no worker was reachable or
+  the token was rejected. After a run found no worker, further runs within 20 seconds go to
+  the fallback right away, so a burst of calls (like Jellyfin's startup checks) does not wait
+  through the retries each time. The activity log records every fallback with its reason.
 - **Shutdown:** on SIGTERM the worker stops accepting new calls and gives running commands
   `SHUTDOWN_GRACE_PERIOD` seconds before terminating them.
 - **Versions:** clients and workers of different versions work together, so they can be
