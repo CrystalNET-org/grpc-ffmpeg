@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Jellyfin plugin
+    url: https://github.com/CrystalNET-org/Jellyfin.Plugin.GrpcFfmpeg/issues
+    about: Problems with the gRPC-ffmpeg plugin for Jellyfin
+  - name: Questions and help
+    url: https://discord.gg/Yj5AYwcGXu
+    about: Ask on Discord
+  - name: Security vulnerability
+    url: https://github.com/CrystalNET-org/grpc-ffmpeg/security/advisories/new
+    about: Report security problems privately, not as an issue
