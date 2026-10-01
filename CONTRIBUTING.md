@@ -1,114 +1,133 @@
 # Contributing to grpc-ffmpeg
 
-Thank you for your interest in contributing to the `grpc-ffmpeg` project! We welcome contributions of all kinds, including bug reports, feature requests, code contributions, documentation updates, and more.
+Bug reports, ideas and pull requests are welcome.
 
-To make the contribution process smooth, please follow these guidelines.
+- **Bugs:** open an [issue](https://github.com/CrystalNET-org/grpc-ffmpeg/issues) with the
+  steps to reproduce, what you expected and what happened, and the versions of the worker
+  image, the client and Jellyfin (if involved). The worker's log and the client's activity
+  log (`LOG_FILE`) usually show what went wrong.
+- **Ideas:** open an issue describing the problem it solves before writing larger changes.
+- **Pull requests:** against `main`. Keep them focused, and update the README when behaviour
+  or configuration changes.
 
+## Repository layout
 
-## Table of Contents
+```
+grpc-ffmpeg/
+├── src/
+│   ├── proto/ffmpeg.proto       # gRPC API shared by worker and clients
+│   ├── server/                  # worker (Python) and the health check sample video
+│   └── client/
+│       ├── rust/                # client binary (the released client)
+│       └── grpc-ffmpeg.py       # Python client
+├── docker/
+│   ├── Dockerfile.server        # worker image
+│   └── Dockerfile.client        # Python client image, for testing
+├── example_deployment/          # Kubernetes and docker compose examples
+├── scripts/next-release-tag.sh  # computes the next release tag
+├── .woodpecker/                 # CI pipelines
+├── renovate.json                # dependency updates
+├── requirements.txt             # Python runtime dependencies
+└── requirements-build.txt       # Python stub generation (grpcio-tools)
+```
 
-- [Getting Started](#getting-started)
-- [How to Contribute](#how-to-contribute)
-  - [Reporting Bugs](#reporting-bugs)
-  - [Suggesting Features](#suggesting-features)
-  - [Submitting Code](#submitting-code)
-- [Development Workflow](#development-workflow)
-- [Coding Standards](#coding-standards)
-- [Pull Request Checklist](#pull-request-checklist)
+## Worker
 
----
+The worker is a Python asyncio gRPC server. It needs Python 3.10 or later and an ffmpeg
+installation, ideally jellyfin-ffmpeg.
 
-## Getting Started
+```bash
+python3 -m venv venv && . venv/bin/activate
+pip install -r requirements.txt -r requirements-build.txt
 
-1. Fork the repository to your GitHub account.
-2. Clone the forked repository to your local machine:
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/grpc-ffmpeg.git
-   cd grpc-ffmpeg
-   ```
-3. Set up the development environment by following the [Setup Guide](doc/BUILDING.md).
+# Generate the gRPC stubs
+mkdir -p gen
+python -m grpc_tools.protoc -I src/proto --python_out=gen --grpc_python_out=gen src/proto/ffmpeg.proto
 
----
+# Run it against a local ffmpeg
+PYTHONPATH=gen VALID_TOKEN=secret BINARY_PATH_PREFIX=/usr/lib/jellyfin-ffmpeg/ \
+  python src/server/grpc-ffmpeg.py
+```
 
-## How to Contribute
+The worker image bundles jellyfin-ffmpeg and the VAAPI drivers:
 
-### Reporting Bugs
+```bash
+docker build -f docker/Dockerfile.server -t ffmpeg-worker .
+```
 
-If you encounter a bug:
-- **Check existing issues:** Look at the [issue tracker](https://github.com/CrystalNET-org/grpc-ffmpeg/issues) to see if the bug has already been reported.
-- **Create a new issue:** If the bug is not reported, [open a new issue](https://github.com/CrystalNET-org/grpc-ffmpeg/issues/new) and include:
-  - A clear and descriptive title.
-  - Steps to reproduce the issue.
-  - Expected and actual behavior.
-  - Environment details (e.g., OS, Python version, FFmpeg version).
+[`example_deployment/compose/docker-compose.yml`](example_deployment/compose/docker-compose.yml)
+builds and starts a worker together with a Python client container.
 
-### Suggesting Features
+## Rust client
 
-If you have an idea for a feature:
-- Check the [issue tracker](https://github.com/CrystalNET-org/grpc-ffmpeg/issues) to see if the feature has already been requested.
-- If not, [open a new issue](https://github.com/CrystalNET-org/grpc-ffmpeg/issues/new) with:
-  - A detailed explanation of the feature.
-  - Why it would be useful.
-  - (Optional) Examples of how it might work.
+The released client is in `src/client/rust`. It needs a Rust toolchain and `protoc`
+(the build generates the gRPC code from `src/proto/ffmpeg.proto`).
 
-### Submitting Code
+```bash
+cd src/client/rust
+cargo test
+cargo build --release
+ln -sf "$PWD/target/release/grpc-ffmpeg-client" /tmp/ffmpeg
+GRPC_HOST=localhost AUTH_TOKEN=secret /tmp/ffmpeg -version
+```
 
-We accept pull requests for:
-- Bug fixes.
-- New features.
-- Documentation improvements.
-- Performance enhancements.
+The release binaries are fully static. They are built like this (see
+[`.cargo/config.toml`](src/client/rust/.cargo/config.toml)):
 
----
+```bash
+# Linux amd64 and arm64 (musl); needs clang and llvm
+rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+cargo build --release --target x86_64-unknown-linux-musl
+cargo build --release --target aarch64-unknown-linux-musl
 
-## Development Workflow
+# Windows amd64; needs cargo-zigbuild and zig (pip install ziglang cargo-zigbuild)
+rustup target add x86_64-pc-windows-gnu
+cargo zigbuild --release --target x86_64-pc-windows-gnu
+```
 
-1. **Create a Branch:**
-   Create a new branch for your work:
-   ```bash
-   git checkout -b feature/your-feature-name
-   ```
+Cargo uses one job per CPU core, at about 150 MB each. On machines with many cores and little
+memory, limit it with `CARGO_BUILD_JOBS`.
 
-2. **Make Changes:**
-   Follow the [Coding Standards](#coding-standards) when writing code.
+## Python client
 
-3. **Commit Changes:**
-   Write clear and concise commit messages:
-   ```bash
-   git commit -m "Add feature: description of feature"
-   ```
+`src/client/grpc-ffmpeg.py` behaves like the Rust client, without `CONNECT_TIMEOUT` and
+`LOG_FILE`. It needs the packages in `requirements.txt` and the generated stubs on
+`PYTHONPATH`. Keep both clients in step when changing client behaviour.
 
-4. **Push Changes:**
-   Push your branch to your fork:
-   ```bash
-   git push origin feature/your-feature-name
-   ```
+## Code style
 
-5. **Create a Pull Request:**
-   Open a pull request against the `main` branch on the original repository.
+- Python: PEP 8, matching the existing code.
+- Rust: match the existing code; `cargo test` must pass.
+- Changes to `ffmpeg.proto` must stay compatible: clients and workers of different versions
+  have to keep working together. Add fields and methods, don't change or remove them.
 
----
+## CI
 
-## Coding Standards
+The pipelines in `.woodpecker/` run on [Woodpecker CI](https://woodpecker-ci.org/):
 
-- **Python Style Guide:** Follow [PEP 8](https://pep8.org/).
-- **Naming Conventions:**
-  - Use snake_case for variables and functions.
-  - Use PascalCase for classes.
-- **Code Formatting:** Use `black` as formatter to maintain consistent formatting:
-  ```bash
-  black .
-  ```
+| Pipeline | Runs on | Does |
+| --- | --- | --- |
+| `build_pr.yaml` | pull requests | Test-builds the worker image |
+| `build_dev_version.yaml` | pushes to `main` | Builds and pushes the worker image as `dev` |
+| `build_rust_client.yaml` | pushes to `main` | Runs the client tests and builds all client binaries |
+| `auto_release.yaml` | pushes to `main` that change the worker Dockerfile | Tags a release, after the two builds above succeeded |
+| `build_tag_version.yaml` | tags | Builds and pushes the worker image with the tag |
+| `build_tag_version_rust_client.yaml` | tags | Builds the client binaries and attaches them to the GitHub release |
+| `renovate.yaml` | cron, manual | Runs Renovate |
 
----
+## Releases
 
-## Pull Request Checklist
+Release tags are `<jellyfin-ffmpeg version>-<major>.<minor>`, e.g. `8.1.3-7.8` for
+jellyfin-ffmpeg `8.1.3-1`. The minor number increases with every release.
 
-Before submitting a pull request, ensure you:
-- [ ] Followed the [Coding Standards](#coding-standards).
-- [ ] Added or updated relevant documentation.
-- [ ] Addressed any feedback from code reviews.
+New jellyfin-ffmpeg versions are released automatically:
 
----
+1. Renovate opens a PR that updates `JELLYFIN_FFMPEG_VERSION` in `docker/Dockerfile.server`,
+   6 hours after the upstream release. It stays on the current major version; a new major
+   version goes with the Jellyfin release that uses it and is updated by hand.
+2. The PR pipeline test-builds the worker image, and Renovate merges the PR once it passes.
+3. On `main`, once the builds succeeded, `auto_release.yaml` pushes the next tag
+   (`scripts/next-release-tag.sh`), which publishes the worker image and the client binaries.
 
-We appreciate your contributions and look forward to working with you!
+Other changes are released by pushing the next tag by hand. The Jellyfin plugin picks up new
+releases automatically through its own Renovate setup.
