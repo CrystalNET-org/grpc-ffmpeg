@@ -68,7 +68,6 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages -r /app/requir
 COPY /src/server/ /app/
 
 COPY --from=builder /app/ffmpeg* /app/
-COPY --from=builder /app/ffmpeg* /client/
 
 RUN chmod a+x /app/grpc-ffmpeg.py
 

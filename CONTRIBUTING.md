@@ -17,12 +17,8 @@ grpc-ffmpeg/
 ├── src/
 │   ├── proto/ffmpeg.proto       # gRPC API shared by worker and clients
 │   ├── server/                  # worker (Python) and the health check sample video
-│   └── client/
-│       ├── rust/                # client binary (the released client)
-│       └── grpc-ffmpeg.py       # Python client
-├── docker/
-│   ├── Dockerfile.server        # worker image
-│   └── Dockerfile.client        # Python client image, for testing
+│   └── client/rust/             # client
+├── docker/Dockerfile.server     # worker image
 ├── example_deployment/          # Kubernetes and docker compose examples
 ├── scripts/next-release-tag.sh  # computes the next release tag
 ├── .woodpecker/                 # CI pipelines
@@ -56,11 +52,11 @@ docker build -f docker/Dockerfile.server -t ffmpeg-worker .
 ```
 
 [`example_deployment/compose/docker-compose.yml`](example_deployment/compose/docker-compose.yml)
-builds and starts a worker together with a Python client container.
+builds and starts a worker from the source; test it with a locally built client.
 
-## Rust client
+## Client
 
-The released client is in `src/client/rust`. It needs a Rust toolchain and `protoc`
+The client is in `src/client/rust`. It needs a Rust toolchain and `protoc`
 (the build generates the gRPC code from `src/proto/ffmpeg.proto`).
 
 ```bash
@@ -87,12 +83,6 @@ cargo zigbuild --release --target x86_64-pc-windows-gnu
 
 Cargo uses one job per CPU core, at about 150 MB each. On machines with many cores and little
 memory, limit it with `CARGO_BUILD_JOBS`.
-
-## Python client
-
-`src/client/grpc-ffmpeg.py` behaves like the Rust client, without `CONNECT_TIMEOUT` and
-`LOG_FILE`. It needs the packages in `requirements.txt` and the generated stubs on
-`PYTHONPATH`. Keep both clients in step when changing client behaviour.
 
 ## Code style
 
