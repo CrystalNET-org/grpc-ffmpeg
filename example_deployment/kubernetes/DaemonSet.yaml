@@ -110,13 +110,18 @@ spec:
 
         # Mount everything Jellyfin's ffmpeg reads or writes at the same paths
         # as in the Jellyfin container: the media library, Jellyfin's cache
-        # (transcodes, images) and, if used, its subtitle directory.
+        # (including transcodes) and Jellyfin's temp directory (image
+        # extraction, trickplay). Mount the cache volume's "temp" directory at
+        # /tmp/jellyfin in the Jellyfin container as well.
         volumeMounts:
         - name: media
           mountPath: /media
           readOnly: true
         - name: cache
           mountPath: /cache
+        - name: cache
+          mountPath: /tmp/jellyfin
+          subPath: temp
         - name: tmp
           mountPath: /tmp
 

@@ -47,8 +47,15 @@ Files are not transferred: the worker reads and writes them directly.
 
 ## Requirements
 
-- **Shared paths:** media, transcode and cache directories must be mounted at the same paths
-  on Jellyfin and on every worker, e.g. over NFS or a shared volume.
+- **Shared paths:** the worker reads and writes the files directly, so everything ffmpeg
+  works on must be mounted at the same paths on Jellyfin and on every worker, e.g. over NFS or
+  a shared volume:
+  - the media library,
+  - Jellyfin's cache directory, including the transcode directory,
+  - Jellyfin's temp directory, `/tmp/jellyfin` by default, where image extraction and trickplay
+    write their output.
+
+  The Jellyfin plugin's connection test checks these directories.
 - **One kind of GPU per pool:** Jellyfin builds its hardware-accelerated commands for one
   acceleration type (QSV, VAAPI, NVENC, …) and checks the hardware once at startup, through
   whichever worker answers. All workers behind the same address need the same kind of GPU.
