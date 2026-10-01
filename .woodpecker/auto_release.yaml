@@ -1,6 +1,12 @@
 # Tags a release when a push to main changes the bundled jellyfin-ffmpeg
 # version (e.g. an automerged Renovate update); the tag pipelines then build
 # and publish the worker image and the client binaries.
+# Only tag once the builds of this commit succeeded; a failed build skips
+# the tag. The tag can be pushed by hand after fixing it.
+depends_on:
+  - build_dev_version
+  - build_rust_client
+
 when:
   - event: push
     branch: ${CI_REPO_DEFAULT_BRANCH}
