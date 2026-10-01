@@ -53,7 +53,8 @@ per node and a Service named `ffmpeg-workers`). There is also a
 
 ### 2. Install the client in the Jellyfin container
 
-Download the static client for your architecture from the
+Download the static client for your platform (`grpc-ffmpeg-client-amd64`,
+`grpc-ffmpeg-client-arm64` or `grpc-ffmpeg-client-windows-amd64.exe`) from the
 [latest release](https://github.com/CrystalNET-org/grpc-ffmpeg/releases/latest). Install it
 under the names `ffmpeg` and `ffprobe` in the same directory; the client runs the binary
 whose name it was invoked as.
@@ -67,13 +68,21 @@ ln -s grpc-ffmpeg-client /opt/grpc-ffmpeg/ffmpeg
 ln -s grpc-ffmpeg-client /opt/grpc-ffmpeg/ffprobe
 ```
 
-Configure the client through environment variables in the Jellyfin container:
+Configure the client with a `grpc-ffmpeg.conf` next to it (or environment variables, see
+[Configuration](#client)):
 
-```bash
-GRPC_HOST=ffmpeg-workers   # worker host name, Service or load balancer
-GRPC_PORT=50051
-AUTH_TOKEN=change-me       # must match the worker's VALID_TOKEN
+```ini
+GRPC_HOST=ffmpeg-workers        # worker host name, Service or load balancer
+AUTH_TOKEN=change-me            # must match the worker's VALID_TOKEN
+FALLBACK_DIR=/usr/lib/jellyfin-ffmpeg
+RETRIES=2
 ```
+
+Jellyfin refuses to start if its ffmpeg check fails, so setting `FALLBACK_DIR` to a local
+ffmpeg installation is recommended.
+
+On Windows, copy `grpc-ffmpeg-client-windows-amd64.exe` to `ffmpeg.exe` and `ffprobe.exe` in
+the same directory instead of creating symlinks.
 
 ### 3. Point Jellyfin at the client
 
@@ -106,21 +115,39 @@ Set the FFmpeg path to `/opt/grpc-ffmpeg/ffmpeg`. You can do this under *Dashboa
 
 ### Client
 
-| Variable | Default | Description |
+The client reads its settings from a `grpc-ffmpeg.conf` file with `KEY=VALUE` lines
+(`#` starts a comment, values may be quoted). It looks for the file next to the name it was
+invoked as (e.g. next to the `ffmpeg` symlink), then next to the binary itself; set
+`GRPC_FFMPEG_CONFIG` to use a different file. Environment variables with the same names
+override the file.
+
+```ini
+# /opt/grpc-ffmpeg/grpc-ffmpeg.conf
+GRPC_HOST=ffmpeg-workers
+AUTH_TOKEN=change-me
+FALLBACK_DIR=/usr/lib/jellyfin-ffmpeg
+```
+
+| Setting | Default | Description |
 | --- | --- | --- |
 | `GRPC_HOST` | `ffmpeg-workers` | Worker host name or IP address. |
 | `GRPC_PORT` | `50051` | Worker gRPC port. |
 | `AUTH_TOKEN` | `my_secret_token1` | Token sent to the worker; must match its `VALID_TOKEN`. |
 | `USE_SSL` | `false` | Connect over TLS. |
 | `CERTIFICATE_PATH` | `server.crt` | CA certificate used to verify the worker when `USE_SSL=true`. |
+| `FALLBACK_DIR` | *(unset)* | Directory with local binaries of the same names (e.g. `/usr/lib/jellyfin-ffmpeg`). If no worker is reachable, the command runs there instead, so Jellyfin keeps working (and keeps starting) while the workers are down. |
+| `RETRIES` | `5` | Attempts, with exponential backoff, while no worker is reachable or all are busy. Lower it when using `FALLBACK_DIR` so the fallback kicks in quickly. |
+| `CONNECT_TIMEOUT` | `10` | Seconds to wait for a connection per attempt (Rust client only). |
+| `LOG_FILE` | *(unset)* | Activity log: one line per command with its exit code and duration, the client's own messages (retries, auth errors, fallback), and the last lines of ffmpeg's stderr for failed commands. Useful because callers like Jellyfin often discard ffmpeg's stderr. A regular file is appended to and rotated at 1 MB. A named pipe (FIFO) is written without blocking, so nothing touches the disk and lines are dropped while nobody reads it. Rust client only. |
 
 ## Behaviour
 
 - **Cancellation:** if a client stops or is killed (e.g. Jellyfin ends a transcode), the worker
   terminates the corresponding process. It sends SIGTERM first, then SIGKILL after 3 seconds.
   Dead clients are detected through HTTP/2 keepalive.
-- **Retries:** clients retry up to 5 times with exponential backoff while the worker is
-  unreachable or busy, but never once a command has started.
+- **Retries:** clients retry (`RETRIES`, default 5) with exponential backoff while the worker
+  is unreachable or busy, but never once a command has started. If no worker was reachable and
+  `FALLBACK_DIR` is set, the command runs locally instead.
 - **Shutdown:** on SIGTERM the worker stops accepting new calls and gives running commands
   `SHUTDOWN_GRACE_PERIOD` seconds before terminating them.
 - **Compatibility:** clients and workers of different versions work together, so they can be
@@ -168,6 +195,24 @@ cd src/client/rust && cargo build --release
 A Python client with the same behaviour is available in `src/client/grpc-ffmpeg.py`. It needs
 Python 3.10+ and the packages in `requirements.txt`.
 
+## Releases
+
+Release tags are `<upstream jellyfin-ffmpeg version>-<our version>`, e.g. `7.1.4-7.5` for
+jellyfin-ffmpeg `7.1.4-3`. Our version's minor number increases with every release. A tag
+builds and publishes the worker image and the client binaries.
+
+New jellyfin-ffmpeg versions are released automatically:
+
+1. Renovate opens a PR that updates `JELLYFIN_FFMPEG_VERSION`, 6 hours after the upstream
+   release (7.x only).
+2. The PR pipeline test-builds the worker image, and Renovate merges the PR once it and the
+   other checks pass.
+3. On `main`, `.woodpecker/auto_release.yaml` notices that the bundled jellyfin-ffmpeg
+   version differs from the latest release, and pushes the next tag
+   (`scripts/next-release-tag.sh`).
+
+Other changes are released by pushing a tag by hand, following the same scheme.
+
 ## Repository layout
 
 ```
@@ -182,6 +227,7 @@ grpc-ffmpeg/
 ├── example_deployment/          # Kubernetes and docker compose examples
 ├── doc/                         # build and run instructions
 ├── .woodpecker/                 # CI pipelines
+├── scripts/                     # release helpers
 ├── requirements.txt             # Python runtime dependencies
 └── requirements-build.txt       # Python stub generation (grpcio-tools)
 ```

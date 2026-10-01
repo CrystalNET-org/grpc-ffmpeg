@@ -1,4 +1,4 @@
-# renovate: datasource=github-releases depName=jellyfin/jellyfin-ffmpeg versioning=loose
+# renovate: datasource=github-releases depName=jellyfin/jellyfin-ffmpeg versioning=loose extractVersion=^v(?<version>.*)$
 ARG JELLYFIN_FFMPEG_VERSION=7.1.4-3
 
 FROM debian:trixie-slim AS builder

@@ -1,0 +1,13 @@
+# Test-build the worker image for pull requests (e.g. Renovate updates) without
+# pushing it; Renovate only automerges once this passes.
+when:
+  - event: pull_request
+
+steps:
+  docker-build-test:
+    image: woodpeckerci/plugin-docker-buildx:6.1.2
+    settings:
+      repo: ffmpeg-worker-test
+      dockerfile: docker/Dockerfile.server
+      platforms: linux/amd64
+      dry_run: true

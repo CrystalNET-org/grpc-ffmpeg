@@ -10,6 +10,8 @@ prost = "0.14.4"
 tonic-prost = "0.14.6"
 anyhow = "1"
 futures-util = { version = "0.3", default-features = false }
+
+[target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [build-dependencies]

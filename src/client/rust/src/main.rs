@@ -12,18 +12,31 @@
 //! The client's stdin is forwarded to the remote process, so e.g. the "q"
 //! Jellyfin writes to stop ffmpeg gracefully works as with a local ffmpeg.
 //!
-//! Configuration is primarily done through environment variables:
+//! Settings are read from a `grpc-ffmpeg.conf` file (`KEY=VALUE` lines) next
+//! to the client (see [`config_file`]), or the file named by
+//! `GRPC_FFMPEG_CONFIG`. Environment variables override the file:
 //! - `GRPC_HOST`: Hostname or IP of the gRPC server (default: "ffmpeg-workers")
 //! - `GRPC_PORT`: Port of the gRPC server (default: "50051")
 //! - `USE_SSL`: "true" or "false" to enable/disable SSL/TLS (default: "false")
 //! - `CERTIFICATE_PATH`: Path to the server's TLS certificate if `USE_SSL` is "true" (default: "server.crt")
 //! - `AUTH_TOKEN`: Bearer token for authentication (default: "my_secret_token1")
+//! - `FALLBACK_DIR`: Directory with local binaries of the same names; used when
+//!   no worker is reachable (default: none)
+//! - `RETRIES`: Attempts while no worker is reachable or all are busy (default: 5)
+//! - `CONNECT_TIMEOUT`: Seconds to wait for a connection per attempt (default: 10)
+//! - `LOG_FILE`: File or named pipe (FIFO) to write an activity log to: each
+//!   command with its exit code, the client's own messages, and the end of
+//!   ffmpeg's stderr for failed commands (default: none). A FIFO is written
+//!   without blocking; lines are dropped while nobody reads it.
 
 use futures_util::stream::{self, Stream, StreamExt};
+use std::collections::HashMap;
 use std::env;
 use std::io::{self, Read, Write};
-use std::sync::Arc;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::sleep;
 use tonic::metadata::MetadataValue;
@@ -37,6 +50,232 @@ use ffmpeg::{CommandRequest, ExecuteRequest};
 /// The `ffmpeg` module contains the generated Rust code from `ffmpeg.proto`.
 pub mod ffmpeg {
     tonic::include_proto!("ffmpeg");
+}
+
+const CONFIG_FILE_NAME: &str = "grpc-ffmpeg.conf";
+
+/// Size at which the activity log is rotated to `<file>.1`.
+const LOG_MAX_BYTES: u64 = 1024 * 1024;
+/// How much of ffmpeg's stderr is kept for the activity log.
+const STDERR_TAIL_BYTES: usize = 4096;
+
+/// The activity log (see `LOG_FILE`), set up once in `main`.
+static ACTIVITY_LOG: OnceLock<Option<ActivityLog>> = OnceLock::new();
+/// The end of the remote process's stderr, for the activity log.
+static STDERR_TAIL: std::sync::Mutex<Vec<u8>> = std::sync::Mutex::new(Vec::new());
+
+struct ActivityLog {
+    path: PathBuf,
+    /// "[pid] ffmpeg", so lines of concurrent commands can be told apart.
+    prefix: String,
+}
+
+/// Longest line written to the activity log. Writes of up to PIPE_BUF (4096)
+/// bytes to a FIFO are atomic, so lines of concurrent commands never mix.
+const LOG_MAX_LINE_BYTES: usize = 4000;
+
+/// Appends a line to the activity log, if one is configured. Failures are
+/// ignored: logging must never break or slow down a command.
+fn log_activity(message: &str) {
+    let Some(Some(log)) = ACTIVITY_LOG.get() else {
+        return;
+    };
+    let mut line = format!("{} {} {}", utc_timestamp(), log.prefix, message);
+    if line.len() > LOG_MAX_LINE_BYTES {
+        let mut cut = LOG_MAX_LINE_BYTES - 3;
+        while !line.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        line.truncate(cut);
+        line.push('…');
+    }
+    line.push('\n');
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{FileTypeExt, OpenOptionsExt};
+        if std::fs::metadata(&log.path).is_ok_and(|m| m.file_type().is_fifo()) {
+            // Non-blocking: fails right away if nobody reads the pipe (ENXIO)
+            // or its buffer is full (EAGAIN); the line is dropped then.
+            if let Ok(mut pipe) = std::fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(&log.path)
+            {
+                let _ = pipe.write_all(line.as_bytes());
+            }
+            return;
+        }
+    }
+
+    if std::fs::metadata(&log.path).is_ok_and(|m| m.len() > LOG_MAX_BYTES) {
+        let mut rotated = log.path.clone().into_os_string();
+        rotated.push(".1");
+        let _ = std::fs::rename(&log.path, rotated);
+    }
+    // One write per line in append mode keeps concurrent writers' lines whole
+    if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log.path) {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// Prints a message of the client itself to stderr and the activity log.
+macro_rules! diag {
+    ($($arg:tt)*) => {{
+        let message = format!($($arg)*);
+        eprintln!("{}", message);
+        log_activity(&message);
+    }};
+}
+
+/// Keeps the last `STDERR_TAIL_BYTES` of the remote stderr.
+fn remember_stderr(data: &[u8]) {
+    if !matches!(ACTIVITY_LOG.get(), Some(Some(_))) {
+        return;
+    }
+    let mut tail = STDERR_TAIL.lock().unwrap_or_else(|e| e.into_inner());
+    tail.extend_from_slice(data);
+    let excess = tail.len().saturating_sub(STDERR_TAIL_BYTES);
+    tail.drain(..excess);
+}
+
+/// Logs the last lines of the remote stderr, one log line each.
+fn log_stderr_tail() {
+    let tail = STDERR_TAIL.lock().unwrap_or_else(|e| e.into_inner());
+    let text = String::from_utf8_lossy(&tail);
+    // ffmpeg ends progress lines with \r
+    let lines: Vec<&str> = text
+        .split(['\n', '\r'])
+        .map(str::trim_end)
+        .filter(|line| !line.is_empty())
+        .collect();
+    for line in &lines[lines.len().saturating_sub(10)..] {
+        log_activity(&format!("  stderr: {}", line));
+    }
+}
+
+/// Current UTC time as "YYYY-MM-DD HH:MM:SS".
+fn utc_timestamp() -> String {
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        year,
+        month,
+        day,
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
+}
+
+/// Shortens long command lines (transcodes) for the activity log.
+fn preview(args: &[String]) -> String {
+    const MAX: usize = 400;
+    let line = args.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line,
+    }
+}
+
+/// Client settings.
+struct Config {
+    host: String,
+    port: String,
+    use_ssl: bool,
+    certificate_path: String,
+    auth_token: String,
+    /// Whether AUTH_TOKEN was configured, rather than the default being used.
+    auth_token_set: bool,
+    fallback_dir: Option<PathBuf>,
+    log_file: Option<PathBuf>,
+    retries: u32,
+    connect_timeout: Duration,
+}
+
+impl Config {
+    /// Reads the config file (if any), with environment variables taking
+    /// precedence over its values.
+    fn load(argv0: &Path) -> Config {
+        let file_values = config_file(argv0)
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .map(|text| parse_config(&text))
+            .unwrap_or_default();
+        let get = |key: &str| {
+            env::var(key)
+                .ok()
+                .or_else(|| file_values.get(key).cloned())
+                .filter(|value| !value.is_empty())
+        };
+        let get_or = |key: &str, default: &str| get(key).unwrap_or_else(|| default.to_string());
+        Config {
+            host: get_or("GRPC_HOST", "ffmpeg-workers"),
+            port: get_or("GRPC_PORT", "50051"),
+            use_ssl: get_or("USE_SSL", "false").eq_ignore_ascii_case("true"),
+            certificate_path: get_or("CERTIFICATE_PATH", "server.crt"),
+            auth_token_set: get("AUTH_TOKEN").is_some(),
+            auth_token: get_or("AUTH_TOKEN", "my_secret_token1"),
+            fallback_dir: get("FALLBACK_DIR").map(PathBuf::from),
+            log_file: get("LOG_FILE").map(PathBuf::from),
+            retries: get("RETRIES").and_then(|v| v.parse().ok()).unwrap_or(5).max(1),
+            connect_timeout: Duration::from_secs(
+                get("CONNECT_TIMEOUT").and_then(|v| v.parse().ok()).unwrap_or(10),
+            ),
+        }
+    }
+}
+
+/// Finds the config file: `GRPC_FFMPEG_CONFIG` if set, otherwise
+/// `grpc-ffmpeg.conf` in the directory the client was invoked from (where e.g.
+/// the `ffmpeg` symlink lives), then in the directory of the binary itself.
+fn config_file(argv0: &Path) -> Option<PathBuf> {
+    if let Some(path) = env::var_os("GRPC_FFMPEG_CONFIG") {
+        return Some(PathBuf::from(path));
+    }
+    let invoked_dir = argv0
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .map(Path::to_path_buf);
+    let binary_dir = env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    invoked_dir
+        .into_iter()
+        .chain(binary_dir)
+        .map(|dir| dir.join(CONFIG_FILE_NAME))
+        .find(|path| path.is_file())
+}
+
+/// Parses `KEY=VALUE` lines; blank lines and lines starting with `#` are
+/// ignored, and values may be wrapped in single or double quotes.
+fn parse_config(text: &str) -> HashMap<String, String> {
+    text.lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .filter_map(|line| line.split_once('='))
+        .map(|(key, value)| {
+            let value = value.trim();
+            let unquoted = ['"', '\'']
+                .iter()
+                .find_map(|q| value.strip_prefix(*q).and_then(|v| v.strip_suffix(*q)))
+                .unwrap_or(value);
+            (key.trim().to_string(), unquoted.to_string())
+        })
+        .collect()
 }
 
 /// Quotes an argument for a POSIX shell, identical to Python's `shlex.quote`,
@@ -55,40 +294,40 @@ fn shell_quote(arg: &str) -> String {
 /// Builds a lazily connecting channel. Connection failures surface as
 /// `Unavailable` on the first call, which lets the retry loop handle a server
 /// that is not up yet.
-async fn build_channel(use_ssl: bool) -> Result<Channel, anyhow::Error> {
-    let grpc_host = env::var("GRPC_HOST").unwrap_or_else(|_| "ffmpeg-workers".to_string());
-    let grpc_port = env::var("GRPC_PORT").unwrap_or_else(|_| "50051".to_string());
-    let scheme = if use_ssl { "https" } else { "http" };
-    let target_uri: Uri = format!("{}://{}:{}", scheme, grpc_host, grpc_port).parse()?;
+async fn build_channel(config: &Config) -> Result<Channel, anyhow::Error> {
+    let scheme = if config.use_ssl { "https" } else { "http" };
+    let target_uri: Uri = format!("{}://{}:{}", scheme, config.host, config.port).parse()?;
 
     let mut endpoint = Channel::builder(target_uri)
-        .connect_timeout(Duration::from_secs(10))
+        .connect_timeout(config.connect_timeout)
         .tcp_keepalive(Some(Duration::from_secs(60)))
         // Detect a dead server on long-running, quiet streams. The interval
         // matches the minimum gRPC servers accept by default.
         .http2_keep_alive_interval(Duration::from_secs(300))
         .keep_alive_timeout(Duration::from_secs(20));
 
-    if use_ssl {
-        let cert_path = env::var("CERTIFICATE_PATH").unwrap_or_else(|_| "server.crt".to_string());
-        let pem = tokio::fs::read(&cert_path)
+    if config.use_ssl {
+        let cert_path = &config.certificate_path;
+        let pem = tokio::fs::read(cert_path)
             .await
             .map_err(|e| anyhow::anyhow!("Failed to read certificate {}: {}", cert_path, e))?;
         let tls_config = ClientTlsConfig::new()
             .ca_certificate(Certificate::from_pem(pem))
-            .domain_name(grpc_host);
+            .domain_name(config.host.clone());
         endpoint = endpoint.tls_config(tls_config)?;
     }
 
     Ok(endpoint.connect_lazy())
 }
 
-/// Local stdin, read on a background thread and shared by all attempts.
-type StdinReceiver = Arc<Mutex<mpsc::Receiver<Vec<u8>>>>;
+/// Local stdin, read on a background thread and shared by all attempts. The
+/// thread only starts once a request body is actually sent, so nothing is
+/// consumed from stdin if the command ends up running locally instead.
+type StdinReceiver = Arc<OnceLock<Mutex<mpsc::Receiver<Vec<u8>>>>>;
 
 /// Reads stdin on a dedicated thread (a blocking read cannot be cancelled)
 /// and forwards it with backpressure. EOF closes the channel.
-fn spawn_stdin_reader() -> StdinReceiver {
+fn spawn_stdin_reader() -> Mutex<mpsc::Receiver<Vec<u8>>> {
     let (tx, rx) = mpsc::channel::<Vec<u8>>(16);
     std::thread::spawn(move || {
         let mut stdin = io::stdin().lock();
@@ -106,7 +345,7 @@ fn spawn_stdin_reader() -> StdinReceiver {
             }
         }
     });
-    Arc::new(Mutex::new(rx))
+    Mutex::new(rx)
 }
 
 /// The request stream for `Execute`: the command, followed by stdin data.
@@ -120,7 +359,12 @@ fn execute_requests(
         stdin: Vec::new(),
     };
     stream::once(async move { first }).chain(stream::unfold(stdin, |stdin| async move {
-        let data = stdin.lock().await.recv().await?;
+        let data = stdin
+            .get_or_init(spawn_stdin_reader)
+            .lock()
+            .await
+            .recv()
+            .await?;
         Some((
             ExecuteRequest {
                 request: None,
@@ -131,32 +375,39 @@ fn execute_requests(
     }))
 }
 
-/// Executes the command on the remote server and returns its exit code.
+/// How a remote run ended.
+enum Outcome {
+    /// The command ran (or failed) remotely with this exit code.
+    Exited(i32),
+    /// No worker could be reached; the command never started.
+    Unreachable,
+}
+
+/// Executes the command on the remote server.
 ///
 /// Retries with exponential backoff while the server is unavailable or all
 /// its ffmpeg slots are busy, but only until the command has started:
 /// re-running a partially streamed command would duplicate its output. Each
 /// attempt opens a new connection, so behind a load balancer a retry can land
 /// on a different worker.
-async fn run_command(args: Vec<String>, use_ssl: bool) -> Result<i32, anyhow::Error> {
-    let auth_token = env::var("AUTH_TOKEN").unwrap_or_else(|_| "my_secret_token1".to_string());
-    let token: MetadataValue<_> = format!("Bearer {}", auth_token).parse()?;
+async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyhow::Error> {
+    let token: MetadataValue<_> = format!("Bearer {}", config.auth_token).parse()?;
     let auth = move |mut req: Request<()>| {
         req.metadata_mut().insert("authorization", token.clone());
         Ok(req)
     };
 
     let command = args.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ");
-    let stdin = spawn_stdin_reader();
+    let stdin: StdinReceiver = Arc::new(OnceLock::new());
     // Servers without the Execute RPC do not support stdin forwarding.
     let mut forward_stdin = true;
 
-    let max_retries = 5;
+    let max_retries = config.retries;
     let base_delay = Duration::from_secs(1);
     let mut attempt = 0;
 
     loop {
-        let channel = build_channel(use_ssl).await?;
+        let channel = build_channel(config).await?;
         let mut client = FFmpegServiceClient::with_interceptor(channel, auth.clone());
         let request = CommandRequest {
             command: command.clone(),
@@ -174,10 +425,12 @@ async fn run_command(args: Vec<String>, use_ssl: bool) -> Result<i32, anyhow::Er
                 let mut stream = response.into_inner();
                 match stream.message().await {
                     // The command has started; from here on errors are final.
-                    Ok(Some(first)) => return stream_output(first, &mut stream).await,
+                    Ok(Some(first)) => {
+                        return stream_output(first, &mut stream).await.map(Outcome::Exited)
+                    }
                     Ok(None) => {
-                        eprintln!("Server closed the stream without reporting an exit code");
-                        return Ok(1);
+                        diag!("Server closed the stream without reporting an exit code");
+                        return Ok(Outcome::Exited(1));
                     }
                     Err(status) => status,
                 }
@@ -194,8 +447,8 @@ async fn run_command(args: Vec<String>, use_ssl: bool) -> Result<i32, anyhow::Er
             tonic::Code::Unavailable | tonic::Code::ResourceExhausted
         );
         if retryable && attempt < max_retries - 1 {
-            let delay = base_delay * 2u32.pow(attempt as u32);
-            eprintln!(
+            let delay = base_delay * 2u32.pow(attempt);
+            diag!(
                 "{}, retrying in {:.1} seconds... (Attempt {}/{})",
                 if result.code() == tonic::Code::Unavailable {
                     "Server unavailable"
@@ -210,13 +463,59 @@ async fn run_command(args: Vec<String>, use_ssl: bool) -> Result<i32, anyhow::Er
             attempt += 1;
             continue;
         }
-        eprintln!(
+        if result.code() == tonic::Code::Unavailable && config.fallback_dir.is_some() {
+            return Ok(Outcome::Unreachable);
+        }
+        diag!(
             "gRPC error after {} attempts: {:?}: {}",
             attempt + 1,
             result.code(),
             result.message()
         );
-        return Ok(1);
+        if result.code() == tonic::Code::Unauthenticated && !config.auth_token_set {
+            // e.g. a broken secret reference; easy to miss as callers like
+            // Jellyfin do not show ffmpeg's stderr
+            diag!("AUTH_TOKEN is not set, so the default token was sent");
+        }
+        return Ok(Outcome::Exited(1));
+    }
+}
+
+/// Runs the command with the local binary of the same name in `dir`. On Unix
+/// the client process is replaced, so stdin, output, signals and the exit
+/// status behave exactly as if the local binary had been run directly.
+fn run_locally(dir: &Path, name: &str, args: &[String]) -> i32 {
+    let mut path = dir.join(name);
+    if cfg!(windows) && !path.is_file() {
+        path.set_extension("exe");
+    }
+    if !path.is_file() {
+        diag!(
+            "No worker reachable and no local fallback at {}",
+            path.display()
+        );
+        return 1;
+    }
+    diag!("No worker reachable, running {} locally", path.display());
+    let mut command = Command::new(&path);
+    command.args(args);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        let error = command.exec();
+        diag!("Failed to run {}: {}", path.display(), error);
+        1
+    }
+    #[cfg(not(unix))]
+    {
+        match command.status() {
+            Ok(status) => status.code().unwrap_or(1),
+            Err(error) => {
+                diag!("Failed to run {}: {}", path.display(), error);
+                1
+            }
+        }
     }
 }
 
@@ -231,6 +530,7 @@ async fn stream_output(
     while let Some(res) = next {
         if !res.binary_output.is_empty() {
             if res.stream == "stderr" {
+                remember_stderr(&res.binary_output);
                 let mut stderr = io::stderr().lock();
                 stderr.write_all(&res.binary_output)?;
                 stderr.flush()?;
@@ -247,6 +547,7 @@ async fn stream_output(
                     stdout.flush()?;
                 }
                 "stderr" => {
+                    remember_stderr(res.output.as_bytes());
                     let mut stderr = io::stderr().lock();
                     stderr.write_all(res.output.as_bytes())?;
                     stderr.flush()?;
@@ -260,7 +561,7 @@ async fn stream_output(
         next = match stream.message().await {
             Ok(message) => message,
             Err(status) => {
-                eprintln!(
+                diag!(
                     "gRPC stream failed: {:?}: {}",
                     status.code(),
                     status.message()
@@ -280,7 +581,7 @@ async fn main() {
     let mut argv = env::args_os().map(|a| a.to_string_lossy().into_owned());
     let argv0 = argv.next().unwrap_or_default();
 
-    let use_ssl = env::var("USE_SSL").unwrap_or_else(|_| "false".to_string()).to_lowercase() == "true";
+    let config = Config::load(Path::new(&argv0));
 
     // BusyBox-like command detection: the name the client is invoked as
     // (e.g. a symlink named "ffmpeg" or "ffprobe") is the remote binary.
@@ -291,15 +592,39 @@ async fn main() {
         .unwrap_or("grpc-ffmpeg-client")
         .to_string();
 
-    let mut full_command = vec![command_from_exe];
-    full_command.extend(argv);
+    let args: Vec<String> = argv.collect();
+    let mut full_command = vec![command_from_exe.clone()];
+    full_command.extend(args.iter().cloned());
+
+    let _ = ACTIVITY_LOG.set(config.log_file.clone().map(|path| ActivityLog {
+        path,
+        prefix: format!("[{}] {}", std::process::id(), command_from_exe),
+    }));
+    log_activity(&format!("run: {}", preview(&full_command)));
+    let started = Instant::now();
 
     // Execute the remote command and exit with the received exit code.
-    match run_command(full_command, use_ssl).await {
-        Ok(exit_code) if exit_code < 0 => exit_by_signal(-exit_code),
-        Ok(exit_code) => std::process::exit(exit_code),
+    match run_command(full_command, &config).await {
+        Ok(Outcome::Exited(exit_code)) => {
+            log_activity(&format!(
+                "exit {} after {:.1}s",
+                exit_code,
+                started.elapsed().as_secs_f32()
+            ));
+            if exit_code != 0 {
+                log_stderr_tail();
+            }
+            if exit_code < 0 {
+                exit_by_signal(-exit_code)
+            }
+            std::process::exit(exit_code)
+        }
+        Ok(Outcome::Unreachable) => {
+            let dir = config.fallback_dir.as_deref().unwrap_or(Path::new("."));
+            std::process::exit(run_locally(dir, &command_from_exe, &args))
+        }
         Err(e) => {
-            eprintln!("An unexpected error occurred: {}", e);
+            diag!("An unexpected error occurred: {}", e);
             std::process::exit(1);
         }
     }
@@ -308,6 +633,7 @@ async fn main() {
 /// The remote process was killed by a signal; die the same way so the caller
 /// sees the same status as for a local process.
 fn exit_by_signal(signal: i32) -> ! {
+    #[cfg(unix)]
     // SAFETY: resetting a signal to its default action and raising it has no
     // memory-safety preconditions.
     unsafe {
@@ -320,7 +646,18 @@ fn exit_by_signal(signal: i32) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::shell_quote;
+    use super::{parse_config, shell_quote};
+
+    #[test]
+    fn parses_config_file() {
+        let config = parse_config(
+            "# comment\n\nGRPC_HOST = worker.lan\nAUTH_TOKEN=\"a=b c\"\nFALLBACK_DIR='/usr/lib/jellyfin-ffmpeg'\ninvalid line\n",
+        );
+        assert_eq!(config["GRPC_HOST"], "worker.lan");
+        assert_eq!(config["AUTH_TOKEN"], "a=b c");
+        assert_eq!(config["FALLBACK_DIR"], "/usr/lib/jellyfin-ffmpeg");
+        assert_eq!(config.len(), 3);
+    }
 
     #[test]
     fn quotes_like_python_shlex() {
