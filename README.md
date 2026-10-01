@@ -197,14 +197,24 @@ Python 3.10+ and the packages in `requirements.txt`.
 
 ## Releases
 
-Release tags are `<upstream jellyfin-ffmpeg version>-<our version>`, e.g. `7.1.4-7.5` for
-jellyfin-ffmpeg `7.1.4-3`. Our version's minor number increases with every release. A tag
+Release tags are `<upstream jellyfin-ffmpeg version>-<our version>`, e.g. `8.1.3-7.8` for
+jellyfin-ffmpeg `8.1.3-1`. Our version's minor number increases with every release. A tag
 builds and publishes the worker image and the client binaries.
+
+Workers should run the same ffmpeg major version as the Jellyfin server they serve, because
+Jellyfin enables ffmpeg options based on the version it detects:
+
+| Worker images | jellyfin-ffmpeg | Jellyfin |
+| --- | --- | --- |
+| `8.1.3-7.8` and later | 8.x | 12.x |
+| up to `7.1.4-7.7` (no longer maintained) | 7.x | 10.11 |
+
+The client works with any of them.
 
 New jellyfin-ffmpeg versions are released automatically:
 
 1. Renovate opens a PR that updates `JELLYFIN_FFMPEG_VERSION`, 6 hours after the upstream
-   release (7.x only).
+   release (8.x only; a new major version goes with a new Jellyfin release).
 2. The PR pipeline test-builds the worker image, and Renovate merges the PR once it and the
    other checks pass.
 3. On `main`, `.woodpecker/auto_release.yaml` notices that the bundled jellyfin-ffmpeg

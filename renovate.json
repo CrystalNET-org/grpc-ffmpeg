@@ -26,11 +26,11 @@
       "groupName": "grpc"
     },
     {
-      "description": "jellyfin-ffmpeg: stay on 7.x (the image installs jellyfin-ffmpeg7; 8.x targets unreleased Jellyfin versions) and automerge once the PR test build passes; the merge is released automatically (.woodpecker/auto_release.yaml)",
+      "description": "jellyfin-ffmpeg: stay on 8.x, the ffmpeg of Jellyfin 12 (a new major version goes with a new Jellyfin release), and automerge once the PR test build passes; the merge is released automatically (.woodpecker/auto_release.yaml)",
       "matchPackageNames": [
         "jellyfin/jellyfin-ffmpeg"
       ],
-      "allowedVersions": "<8",
+      "allowedVersions": "<9",
       "automerge": true,
       "automergeType": "pr",
       "minimumReleaseAge": "6 hours"
