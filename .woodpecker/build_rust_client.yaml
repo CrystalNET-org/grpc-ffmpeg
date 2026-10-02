@@ -4,7 +4,7 @@ when:
 
 steps:
   - name: build
-    image: rust:1.98
+    image: rust:1.99
     environment:
       # renovate: datasource=github-releases depName=protocolbuffers/protobuf extractVersion=^v(?<version>.*)$
       PROTOC_VERSION: "36.2"
