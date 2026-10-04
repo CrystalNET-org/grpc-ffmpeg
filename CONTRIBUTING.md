@@ -21,7 +21,7 @@ grpc-ffmpeg/
 ├── docker/Dockerfile.server     # worker image
 ├── tests/                       # worker unit tests
 ├── example_deployment/          # Kubernetes and docker compose examples
-├── scripts/next-release-tag.sh  # computes the next release tag
+├── scripts/                     # next release tag, jellyfin-ffmpeg checksum
 ├── .woodpecker/                 # CI pipelines
 ├── renovate.json                # dependency updates
 ├── requirements.txt             # Python runtime dependencies
@@ -104,10 +104,11 @@ The pipelines in `.woodpecker/` run on [Woodpecker CI](https://woodpecker-ci.org
 
 | Pipeline | Runs on | Does |
 | --- | --- | --- |
+| `test.yaml` | pull requests, pushes to `main` | Runs the client and worker unit tests |
 | `build_pr.yaml` | pull requests | Test-builds the worker image |
 | `build_dev_version.yaml` | pushes to `main` | Builds and pushes the worker image as `dev` |
-| `build_rust_client.yaml` | pushes to `main` | Runs the client tests and builds all client binaries |
-| `auto_release.yaml` | pushes to `main` that change the worker Dockerfile | Tags a release, after the two builds above succeeded |
+| `build_rust_client.yaml` | pushes to `main` | Builds all client binaries |
+| `auto_release.yaml` | pushes to `main` that change the worker, client, protocol or Dockerfile | Tags a release, after the tests and the two builds above succeeded |
 | `build_tag_version.yaml` | tags | Builds and pushes the worker image with the tag |
 | `build_tag_version_rust_client.yaml` | tags | Builds the client binaries and attaches them to the GitHub release |
 | `renovate.yaml` | cron, manual | Runs Renovate |
@@ -120,11 +121,17 @@ jellyfin-ffmpeg `8.1.3-1`. The minor number increases with every release.
 New jellyfin-ffmpeg versions are released automatically:
 
 1. Renovate opens a PR that updates `JELLYFIN_FFMPEG_VERSION` in `docker/Dockerfile.server`,
-   6 hours after the upstream release. It stays on the current major version; a new major
+   6 hours after the upstream release, and `JELLYFIN_FFMPEG_SHA256` with it
+   (`scripts/update-ffmpeg-checksum.sh`; the image build checks the `.deb` against it). This
+   needs the script in Renovate's `allowedCommands` (`.woodpecker/renovate_config.json`). To
+   update the version by hand, change it and run the script. It stays on the current major version; a new major
    version goes with the Jellyfin release that uses it and is updated by hand.
 2. The PR pipeline test-builds the worker image, and Renovate merges the PR once it passes.
 3. On `main`, once the builds succeeded, `auto_release.yaml` pushes the next tag
    (`scripts/next-release-tag.sh`), which publishes the worker image and the client binaries.
 
-Other changes are released by pushing the next tag by hand. The Jellyfin plugin picks up new
+Changes to the worker, the client, the protocol or the Dockerfile are released the same way
+once merged (`scripts/next-release-tag.sh` compares them with the latest release); other
+changes, such as documentation or CI, are not. A release can always be made by pushing the
+next tag by hand. The Jellyfin plugin picks up new
 releases automatically through its own Renovate setup.

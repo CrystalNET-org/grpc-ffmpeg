@@ -1,16 +1,24 @@
-# Tags a release when a push to main changes the bundled jellyfin-ffmpeg
-# version (e.g. an automerged Renovate update); the tag pipelines then build
-# and publish the worker image and the client binaries.
-# Only tag once the builds of this commit succeeded; a failed build skips
+# Tags a release when a push to main changes what is shipped: the bundled
+# jellyfin-ffmpeg version (e.g. an automerged Renovate update), the worker, the
+# client or the protocol (scripts/next-release-tag.sh). The tag pipelines then
+# build and publish the worker image and the client binaries.
+# Only tag once the tests and builds of this commit succeeded; a failure skips
 # the tag. The tag can be pushed by hand after fixing it.
 depends_on:
+  - test
   - build_dev_version
   - build_rust_client
 
 when:
   - event: push
     branch: ${CI_REPO_DEFAULT_BRANCH}
-    path: docker/Dockerfile.server
+    path:
+      include:
+        - docker/**
+        - src/server/**
+        - src/client/**
+        - src/proto/**
+        - requirements.txt
 
 steps:
   - name: tag-release
@@ -28,7 +36,7 @@ steps:
     commands:
       - git fetch --tags --force origin
       - TAG=$(sh scripts/next-release-tag.sh)
-      - if [ -z "$TAG" ]; then echo "jellyfin-ffmpeg unchanged since the last release, nothing to tag"; exit 0; fi
+      - if [ -z "$TAG" ]; then echo "Nothing shipped changed since the last release, nothing to tag"; exit 0; fi
       - echo "Tagging $${CI_COMMIT_SHA} as $TAG"
       - git tag "$TAG" "$${CI_COMMIT_SHA}"
       - git push "https://x-access-token:$${GITHUB_TOKEN}@github.com/$${CI_REPO}.git" "refs/tags/$TAG"

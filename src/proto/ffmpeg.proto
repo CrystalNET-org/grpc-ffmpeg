@@ -32,6 +32,9 @@ message CommandRequest {
 message CommandResponse {
   string output = 1;
   int32 exit_code = 2;
-  string stream = 3; // "stdout", "stderr", or "exit_code"
+  // "stdout", "stderr", "exit_code", or "started": sent without output once
+  // the process runs, so the client knows not to run the command elsewhere
+  // after a failure (older servers do not send it)
+  string stream = 3;
   bytes binary_output = 4;
 }

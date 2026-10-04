@@ -1,5 +1,7 @@
 # renovate: datasource=github-releases depName=jellyfin/jellyfin-ffmpeg versioning=loose extractVersion=^v(?<version>.*)$
 ARG JELLYFIN_FFMPEG_VERSION=8.1.3-1
+# Checksum of that version's .deb, updated with it by scripts/update-ffmpeg-checksum.sh
+ARG JELLYFIN_FFMPEG_SHA256=fbef9f81a53e175194e3f67832618a86111f7bd37197df21a5d748c34289f9c0
 
 FROM debian:trixie-slim AS builder
 
@@ -10,7 +12,15 @@ WORKDIR /app
 RUN apt-get update && apt-get install --no-install-recommends -y \
     python3 \
     python3-pip \
+    python3-venv \
     && rm -rf /var/lib/apt/lists/*
+
+# The worker's Python dependencies, in a virtual environment copied to the final
+# image, which then needs no pip (same Debian release, so the same Python)
+COPY requirements.txt .
+RUN python3 -m venv /opt/venv && \
+    /opt/venv/bin/pip install --no-cache-dir -r requirements.txt && \
+    /opt/venv/bin/pip uninstall -y pip
 
 # compile the .proto-file for later use from within python
 COPY requirements-build.txt .
@@ -21,6 +31,7 @@ RUN python3 -m grpc_tools.protoc -I. --python_out=. --grpc_python_out=. ffmpeg.p
 # Final stage
 FROM debian:trixie-slim
 ARG JELLYFIN_FFMPEG_VERSION
+ARG JELLYFIN_FFMPEG_SHA256
 
 # Enable non-free repositories
 RUN sed -i 's/Components: main/Components: main contrib non-free/' /etc/apt/sources.list.d/debian.sources
@@ -33,11 +44,12 @@ RUN apt-get update && \
     apt-get install --no-install-recommends -y ca-certificates wget && \
     wget -q -O /tmp/jellyfin-ffmpeg.deb \
         "https://github.com/jellyfin/jellyfin-ffmpeg/releases/download/v${JELLYFIN_FFMPEG_VERSION}/jellyfin-ffmpeg${JELLYFIN_FFMPEG_VERSION%%.*}_${JELLYFIN_FFMPEG_VERSION}-trixie_amd64.deb" && \
+    echo "${JELLYFIN_FFMPEG_SHA256}  /tmp/jellyfin-ffmpeg.deb" | sha256sum -c - && \
     apt-get install --no-install-recommends -y \
         /tmp/jellyfin-ffmpeg.deb \
         libssl3t64 \
         libc-bin \
-        python3-pip \
+        python3 \
         intel-media-va-driver-non-free \
         i965-va-driver \
         nvidia-vaapi-driver \
@@ -60,9 +72,9 @@ RUN apt-get update && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-# setup python specific environment
-COPY requirements.txt /app/
-RUN python3 -m pip install --no-cache-dir --break-system-packages -r /app/requirements.txt
+# The worker's Python dependencies, built in the first stage
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH=/opt/venv/bin:$PATH
 
 # Copy the build artifact from the build stage
 COPY /src/server/ /app/
@@ -70,6 +82,10 @@ COPY /src/server/ /app/
 COPY --from=builder /app/ffmpeg* /app/
 
 RUN chmod a+x /app/grpc-ffmpeg.py
+
+# Fail the build, not the worker, if the copied environment is broken
+RUN cd /app && python3 -c "import grpc, aiohttp, prometheus_client, ffmpeg_pb2_grpc; from pymediainfo import MediaInfo; assert MediaInfo.can_parse()" && \
+    ! command -v pip3
 
 # Expose the port the service runs on
 EXPOSE 50051 8080

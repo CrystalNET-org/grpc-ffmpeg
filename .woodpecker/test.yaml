@@ -1,0 +1,50 @@
+# Unit tests of the client and the worker, for pull requests (e.g. Renovate
+# updates of the client's crates, which the image build does not compile) and
+# for main, where releases wait for them (auto_release.yaml).
+when:
+  - event: pull_request
+  - event: push
+    branch: ${CI_REPO_DEFAULT_BRANCH}
+
+steps:
+  - name: client
+    image: harbor.crystalnet.org/dockerhub-proxy/library/rust:1.99
+    environment:
+      # renovate: datasource=github-releases depName=protocolbuffers/protobuf extractVersion=^v(?<version>.*)$
+      PROTOC_VERSION: "36.2"
+      CARGO_BUILD_JOBS: "8"
+      # CI never reuses incremental data; writing it only adds file cache that
+      # counts against the memory limit
+      CARGO_INCREMENTAL: "0"
+    # One debug build for the host; see build_rust_client.yaml for the numbers
+    backend_options:
+      kubernetes:
+        resources:
+          requests:
+            # Disk written into the container itself (apt, protoc, cargo registry),
+            # not the workspace volume
+            ephemeral-storage: 1Gi
+            cpu: "8"
+            memory: 2Gi
+          limits:
+            memory: 6Gi
+    commands:
+      - apt-get update && apt-get install -y unzip
+      - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-$${PROTOC_VERSION}-linux-x86_64.zip
+      - unzip protoc-$${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
+      - cd src/client/rust
+      - PATH="/usr/local/bin:$PATH" cargo test --locked
+
+  - name: worker
+    # The Python of the worker image (Debian trixie)
+    image: harbor.crystalnet.org/dockerhub-proxy/library/python:3.13-slim
+    backend_options:
+      kubernetes:
+        resources:
+          requests:
+            ephemeral-storage: 512Mi
+    commands:
+      - pip install --no-cache-dir -r requirements.txt -r requirements-build.txt
+      - mkdir -p gen
+      - python -m grpc_tools.protoc -I src/proto --python_out=gen --grpc_python_out=gen src/proto/ffmpeg.proto
+      - PYTHONPATH=gen python -m unittest discover -v tests

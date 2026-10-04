@@ -89,6 +89,9 @@ docker run -d --name ffmpeg-worker \
   ghcr.io/crystalnet-org/ffmpeg-worker:8.1.3-7.8   # or the latest release tag
 ```
 
+> **Always set `VALID_TOKEN`.** Without it, anyone who can reach port 50051 can run ffmpeg
+> with the worker's access to your files (see [Security](#security)).
+
 Mount the same paths that Jellyfin uses, including its temp directory, and run the worker as
 Jellyfin's user (`--user`) so both can work with each other's files. `--group-add` with the
 host's `render` group ID gives that user access to the GPU (the group that owns
@@ -156,15 +159,15 @@ version in `Found ffmpeg version …`, and the worker's log lists every command 
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `VALID_TOKEN` | *(unset)* | Token clients must send. When set, calls without it are rejected with `UNAUTHENTICATED`. When unset, authentication is disabled and a warning is logged. |
-| `BINARY_PATH_PREFIX` | `/usr/lib/jellyfin-ffmpeg/` | Directory containing the binaries. Only `ffmpeg`, `ffprobe`, `mediainfo` and `vainfo` can be run. |
-| `MAX_FFMPEG_WORKERS` | `10` | Maximum number of concurrent `ffmpeg` processes (`0` = unlimited). Further `ffmpeg` calls wait for a free slot. `ffprobe`, `mediainfo` and `vainfo` are never limited, so library scans are not held up. |
+| `VALID_TOKEN` | *(unset)* | Token clients must send. When set, calls without it are rejected with `UNAUTHENTICATED`. **When unset, anyone who can reach the gRPC port can run commands**; a warning is logged. |
+| `BINARY_PATH_PREFIX` | `/usr/lib/jellyfin-ffmpeg/` | Directory containing the binaries. Only `ffmpeg`, `ffprobe`, `mediainfo` and `vainfo` can be run; those not in this directory (such as `mediainfo`, which is not part of jellyfin-ffmpeg) are looked up in `PATH`. |
+| `MAX_FFMPEG_WORKERS` | `10` | Maximum number of concurrent `ffmpeg` processes with an input (`-i`: transcodes, image extraction; `0` = unlimited). Further ones wait for a free slot. Queries such as `ffmpeg -version` or `-encoders`, and `ffprobe`, `mediainfo` and `vainfo`, are never limited, so Jellyfin's startup checks and library scans are not held up. |
 | `CUDA_DEVICES` | *(unset)* | NVIDIA GPUs to spread transcodes over, as indexes or UUIDs (`0,1`), or `auto` for all GPUs `nvidia-smi` lists. Jellyfin always uses CUDA device 0 (`-init_hw_device cuda=cu:0`), so on a worker with several GPUs every transcode would run on the first one. With this set, each command that uses CUDA gets the GPU running the fewest such commands, through `CUDA_VISIBLE_DEVICES`; other commands are unchanged. Raise `MAX_FFMPEG_WORKERS` to match the number of GPUs. |
 | `FFMPEG_QUEUE_TIMEOUT` | `0` | Seconds an `ffmpeg` call may wait for a slot before it is rejected (`0` = wait indefinitely). Clients retry rejected calls on a new connection, so behind a load balancer the retry can reach a less busy worker. |
 | `USE_SSL` | `false` | Serve gRPC over TLS. |
 | `SSL_CERT_PATH` | `server.crt` | TLS certificate (chain). |
 | `SSL_KEY_PATH` | `server.key` | TLS private key. |
-| `GRPC_PORT` | `50051` | gRPC listen port. |
+| `GRPC_PORT` | `50051` | gRPC listen port, on IPv6 and IPv4 where the host has IPv6, otherwise on IPv4 only. |
 | `HTTP_PORT` | `8080` | Port for `/health` and `/metrics`. |
 | `SHUTDOWN_GRACE_PERIOD` | `5` | Seconds running commands get to finish on shutdown before they are terminated. |
 | `HEALTHCHECK_INTERVAL` | `60` | Seconds between health checks. |
@@ -180,7 +183,7 @@ file. Environment variables with the same names override the file.
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `GRPC_HOST` | `ffmpeg-workers` | Worker host name or IP address. |
+| `GRPC_HOST` | `ffmpeg-workers` | Worker host name or IP address (IPv6 with or without brackets). |
 | `GRPC_PORT` | `50051` | Worker gRPC port. |
 | `AUTH_TOKEN` | `my_secret_token1` | Token sent to the worker; must match its `VALID_TOKEN`. |
 | `USE_SSL` | `false` | Connect over TLS. |
@@ -197,7 +200,9 @@ file. Environment variables with the same names override the file.
   worker terminates the process: SIGTERM first, SIGKILL after 3 seconds. Dead clients are
   detected through HTTP/2 keepalive.
 - **Retries:** clients retry with exponential backoff while the worker is unreachable or busy,
-  but never once a command has started.
+  but never once a command has started. Workers tell the client as soon as the process runs,
+  so a command that fails afterwards, e.g. because its worker died, is never run a second
+  time elsewhere or on the fallback, even if it had printed nothing yet.
 - **Fallback:** with `FALLBACK_DIR` set, a command runs locally if no worker was reachable or
   the token was rejected. After a run found no worker, further runs within 20 seconds go to
   the fallback right away, so a burst of calls (like Jellyfin's startup checks) does not wait
@@ -245,7 +250,8 @@ enable TLS with `USE_SSL`.
 
 Release tags are `<jellyfin-ffmpeg version>-<release number>`: `8.1.3-7.8` bundles
 jellyfin-ffmpeg 8.1.3-1. Each tag publishes the worker image and the client binaries. New
-jellyfin-ffmpeg versions are picked up and released automatically.
+jellyfin-ffmpeg versions, and changes to the worker, the client or the protocol, are released
+automatically.
 
 ## Contributing
 

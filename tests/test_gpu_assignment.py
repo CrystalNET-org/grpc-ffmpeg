@@ -4,17 +4,12 @@ Run from the repository root, with the gRPC stubs generated into gen/ (see
 CONTRIBUTING.md):
     PYTHONPATH=gen python -m unittest discover tests
 """
-import importlib.util
-import pathlib
-import sys
 import unittest
 from unittest import mock
 
-SERVER_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "server"
-sys.path.insert(0, str(SERVER_DIR))
-spec = importlib.util.spec_from_file_location("worker", SERVER_DIR / "grpc-ffmpeg.py")
-worker = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(worker)
+import worker_module
+
+worker = worker_module.load()
 
 
 class UsesCudaTest(unittest.TestCase):

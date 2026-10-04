@@ -26,11 +26,20 @@
       "groupName": "grpc"
     },
     {
-      "description": "jellyfin-ffmpeg: stay on 8.x, the ffmpeg of Jellyfin 12 (a new major version goes with a new Jellyfin release), and automerge once the PR test build passes; the merge is released automatically (.woodpecker/auto_release.yaml)",
+      "description": "jellyfin-ffmpeg: stay on 8.x, the ffmpeg of Jellyfin 12 (a new major version goes with a new Jellyfin release), and update the .deb checksum the image build checks (needs allowedCommands in .woodpecker/renovate_config.json), and automerge once the PR test build passes; the merge is released automatically (.woodpecker/auto_release.yaml)",
       "matchPackageNames": [
         "jellyfin/jellyfin-ffmpeg"
       ],
       "allowedVersions": "<9",
+      "postUpgradeTasks": {
+        "commands": [
+          "sh scripts/update-ffmpeg-checksum.sh"
+        ],
+        "fileFilters": [
+          "docker/Dockerfile.server"
+        ],
+        "executionMode": "branch"
+      },
       "automerge": true,
       "automergeType": "pr",
       "minimumReleaseAge": "6 hours"
