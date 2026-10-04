@@ -132,6 +132,9 @@ ffmpeg_rejected_counter = Counter(
 )
 
 
+healthy_gauge = Gauge(
+    "worker_healthy", "1 while the periodic self-test passes (as /health), 0 otherwise"
+)
 gpu_process_gauge = Gauge(
     "ffmpeg_gpu_process_count",
     "Number of running CUDA commands per GPU (with CUDA_DEVICES)",
@@ -490,6 +493,7 @@ class HealthChecker:
             if healthy != health_status["healthy"]:
                 logger.info(f"Health status changed to {'healthy' if healthy else 'unhealthy'}")
             health_status["healthy"] = healthy
+            healthy_gauge.set(1 if healthy else 0)
             await asyncio.sleep(HEALTHCHECK_INTERVAL)
 
     async def check(self):

@@ -219,12 +219,20 @@ The worker serves the following on `HTTP_PORT`:
 
 | Metric | Description |
 | --- | --- |
+| `worker_healthy` | `1` while the self-test passes (as `/health`), `0` otherwise |
 | `ffmpeg_process_count` | Running `ffmpeg` processes |
 | `ffmpeg_queued_count` | `ffmpeg` calls waiting for a free slot |
 | `ffmpeg_max_workers` | Configured `MAX_FFMPEG_WORKERS` |
 | `ffmpeg_gpu_process_count{device}` | Running CUDA commands per GPU (with `CUDA_DEVICES`) |
 | `ffmpeg_rejected_commands_total` | Calls rejected after `FFMPEG_QUEUE_TIMEOUT` |
 | `ffmpeg_commands_total`, `ffprobe_commands_total`, `mediainfo_commands_total`, `vainfo_commands_total` | Commands run, per binary |
+
+[`example_deployment/grafana/grpc-ffmpeg-workers.json`](example_deployment/grafana/grpc-ffmpeg-workers.json)
+is a Grafana dashboard for these metrics: health, load against `MAX_FFMPEG_WORKERS`, queueing
+and rejections, calls per binary and worker, restarts, and running commands per GPU. Import it
+and pick the Prometheus data source. It filters by the scrape `job` (e.g. one per worker pool)
+and a `node` label; if your scrape config adds no `node` label, replace it with `instance` or
+`pod` in the dashboard.
 
 ## Security
 
