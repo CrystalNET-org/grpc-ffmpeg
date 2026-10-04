@@ -5,9 +5,14 @@ steps:
       # renovate: datasource=github-releases depName=protocolbuffers/protobuf extractVersion=^v(?<version>.*)$
       PROTOC_VERSION: "36.2"
       CARGO_BUILD_JOBS: "8"
+      # CI never reuses incremental data; writing it only adds file cache that
+      # counts against the memory limit
+      CARGO_INCREMENTAL: "0"
     # Cargo runs one compiler per CPU it sees, ~150 MB each, and without a CPU
     # limit that is every core of the node; bound it so the build fits in memory
-    # (measured: ~0.4 GiB + ~0.15 GiB per job, ~1.6 GiB with 8)
+    # (measured: ~0.4 GiB + ~0.15 GiB per job, ~1.6 GiB with 8). The limit also
+    # counts the file cache of what the build writes, which got a 3 GiB limit
+    # OOM-killed mid-build, hence the headroom.
     backend_options:
       kubernetes:
         resources:
@@ -15,7 +20,7 @@ steps:
             cpu: "8"
             memory: 2Gi
           limits:
-            memory: 3Gi
+            memory: 6Gi
     commands:
       # Install build tools and protobuf compiler
       - apt-get update && apt-get install -y curl unzip clang llvm python3-pip
