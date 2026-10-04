@@ -21,6 +21,9 @@ steps:
       kubernetes:
         resources:
           requests:
+            # Disk written into the container itself (apt, protoc, rustup targets,
+            # cargo registry; ~1.4 GB measured), not the workspace volume
+            ephemeral-storage: 2Gi
             cpu: "8"
             memory: 2Gi
           limits:
