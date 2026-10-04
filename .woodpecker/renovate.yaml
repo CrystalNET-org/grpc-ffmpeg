@@ -8,6 +8,13 @@ clone:
 steps:
   renovate:
     image: harbor.crystalnet.org/dockerhub-proxy/renovate/renovate:44.132.5
+    # Disk the step writes into its own container (not the workspace volume), so the
+    # scheduler accounts for it and the kubelet does not evict the step first
+    backend_options:
+      kubernetes:
+        resources:
+          requests:
+            ephemeral-storage: 1Gi
     environment:
       GITHUB_COM_TOKEN:
           from_secret: github_com_token

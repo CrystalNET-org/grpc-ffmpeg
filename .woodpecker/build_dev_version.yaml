@@ -1,6 +1,13 @@
 steps:
   docker-build-dev:
     image: woodpeckerci/plugin-docker-buildx:6.1.2
+    # Disk the step writes into its own container (not the workspace volume), so the
+    # scheduler accounts for it and the kubelet does not evict the step first
+    backend_options:
+      kubernetes:
+        resources:
+          requests:
+            ephemeral-storage: 4Gi
     settings:
       debug: true
       repo: harbor.crystalnet.org/library/ffmpeg-worker,ghcr.io/crystalnet-org/ffmpeg-worker
