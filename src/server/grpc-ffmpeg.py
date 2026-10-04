@@ -7,6 +7,7 @@ import os
 import shlex
 import signal
 import socket
+import subprocess
 import sys
 import tempfile
 
@@ -70,6 +71,14 @@ STREAM_CHUNK_SIZE = 64 * 1024
 # Max number of pending output messages per call before we stop reading the pipes
 STREAM_QUEUE_SIZE = 64
 
+# GPUs for commands that use CUDA, as indexes or UUIDs ("0,1"), or "auto" for
+# all GPUs nvidia-smi lists. Jellyfin always uses CUDA device 0
+# ("-init_hw_device cuda=cu:0"), so on a worker with several GPUs every
+# transcode would run on the first one. With CUDA_DEVICES, each such command
+# gets the GPU running the fewest of them, through CUDA_VISIBLE_DEVICES: device
+# 0 inside that process is the chosen GPU. Empty: commands run unchanged.
+CUDA_DEVICES = os.getenv("CUDA_DEVICES", "").strip()
+
 # Health check variables
 HEALTHCHECK_INTERVAL = env_int("HEALTHCHECK_INTERVAL", 60)
 HEALTHCHECK_TIMEOUT = env_int("HEALTHCHECK_TIMEOUT", 60)
@@ -121,6 +130,68 @@ ffmpeg_rejected_counter = Counter(
     "ffmpeg_rejected_commands",
     "Number of ffmpeg commands rejected after waiting FFMPEG_QUEUE_TIMEOUT for a slot",
 )
+
+
+gpu_process_gauge = Gauge(
+    "ffmpeg_gpu_process_count",
+    "Number of running CUDA commands per GPU (with CUDA_DEVICES)",
+    ["device"],
+)
+
+
+def uses_cuda(tokens):
+    """Whether the command sets up a CUDA device or decodes with CUDA."""
+    return any(
+        (option == "-init_hw_device" and value.startswith("cuda"))
+        or (option == "-hwaccel" and value in ("cuda", "nvdec"))
+        for option, value in zip(tokens, tokens[1:])
+    )
+
+
+def detect_cuda_devices(setting):
+    """Parses CUDA_DEVICES; "auto" asks nvidia-smi for the GPU indexes."""
+    if setting.lower() != "auto":
+        return [device.strip() for device in setting.split(",") if device.strip()]
+    try:
+        output = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index", "--format=csv,noheader"],
+            capture_output=True, text=True, timeout=30, check=True,
+        ).stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        logger.warning(f"CUDA_DEVICES=auto: could not list the GPUs with nvidia-smi: {e}")
+        return []
+    return [line.strip() for line in output.splitlines() if line.strip()]
+
+
+class GpuAssigner:
+    """Spreads CUDA commands over the GPUs: each gets the GPU with the fewest
+    running commands, taking turns between equally busy ones. Only used from
+    the event loop, so no locking is needed."""
+
+    def __init__(self, devices):
+        self.devices = list(devices)
+        self.active = {device: 0 for device in self.devices}
+        self._next = 0
+
+    def acquire(self):
+        if not self.devices:
+            return None
+        count = len(self.devices)
+        order = [(self._next + i) % count for i in range(count)]
+        index = min(order, key=lambda i: self.active[self.devices[i]])
+        self._next = (index + 1) % count
+        device = self.devices[index]
+        self.active[device] += 1
+        gpu_process_gauge.labels(device=device).inc()
+        return device
+
+    def release(self, device):
+        if device is not None:
+            self.active[device] -= 1
+            gpu_process_gauge.labels(device=device).dec()
+
+
+gpu_assigner = GpuAssigner([])
 
 
 def is_authorized(context):
@@ -324,6 +395,10 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
         holds_slot = is_ffmpeg and await acquire_ffmpeg_slot(context)
         if is_ffmpeg:
             ffmpeg_process_gauge.inc()
+        gpu = gpu_assigner.acquire() if uses_cuda(tokens) else None
+        env = None
+        if gpu is not None:
+            env = {**os.environ, "CUDA_VISIBLE_DEVICES": gpu}
         process = None
         pumps = []
         stdin_forwarder = None
@@ -338,7 +413,10 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                     ),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
+                    env=env,
                 )
+                if gpu is not None:
+                    logger.info(f"{binary} (pid {process.pid}) runs on GPU {gpu}")
             except OSError as e:
                 logger.error(f"Failed to start {tokens[0]}: {e}")
                 await context.write(
@@ -392,6 +470,7 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                 await asyncio.shield(stop_process_detached(process))
             if is_ffmpeg:
                 ffmpeg_process_gauge.dec()
+            gpu_assigner.release(gpu)
             if holds_slot:
                 ffmpeg_slots.release()
 
@@ -534,6 +613,11 @@ async def start_http_server():
 
 
 async def main():
+    global gpu_assigner
+    gpu_assigner = GpuAssigner(detect_cuda_devices(CUDA_DEVICES))
+    if gpu_assigner.devices:
+        logger.info(f"Spreading CUDA commands over GPUs {', '.join(gpu_assigner.devices)}")
+
     loop = asyncio.get_running_loop()
     stop_event = asyncio.Event()
     for sig in (signal.SIGINT, signal.SIGTERM):

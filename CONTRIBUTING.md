@@ -19,6 +19,7 @@ grpc-ffmpeg/
 │   ├── server/                  # worker (Python) and the health check sample video
 │   └── client/rust/             # client
 ├── docker/Dockerfile.server     # worker image
+├── tests/                       # worker unit tests
 ├── example_deployment/          # Kubernetes and docker compose examples
 ├── scripts/next-release-tag.sh  # computes the next release tag
 ├── .woodpecker/                 # CI pipelines
@@ -43,6 +44,12 @@ python -m grpc_tools.protoc -I src/proto --python_out=gen --grpc_python_out=gen 
 # Run it against a local ffmpeg
 PYTHONPATH=gen VALID_TOKEN=secret BINARY_PATH_PREFIX=/usr/lib/jellyfin-ffmpeg/ \
   python src/server/grpc-ffmpeg.py
+```
+
+Unit tests (with the stubs generated as above):
+
+```bash
+PYTHONPATH=gen python -m unittest discover tests
 ```
 
 The worker image bundles jellyfin-ffmpeg and the VAAPI drivers:

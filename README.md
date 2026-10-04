@@ -94,7 +94,8 @@ Jellyfin's user (`--user`) so both can work with each other's files. `--group-ad
 host's `render` group ID gives that user access to the GPU (the group that owns
 `/dev/dri/renderD*`).
 For NVIDIA GPUs, run the container with the NVIDIA container runtime instead of passing
-`/dev/dri`. The image selects Intel's `iHD` VAAPI driver; for AMD GPUs set
+`/dev/dri`; with several NVIDIA GPUs in one worker, set `CUDA_DEVICES=auto` so transcodes
+use all of them, not just the first. The image selects Intel's `iHD` VAAPI driver; for AMD GPUs set
 `LIBVA_DRIVER_NAME=radeonsi`, for older Intel GPUs `LIBVA_DRIVER_NAME=i965`.
 
 For Kubernetes, [`example_deployment/kubernetes`](example_deployment/kubernetes) has a
@@ -158,6 +159,7 @@ version in `Found ffmpeg version …`, and the worker's log lists every command 
 | `VALID_TOKEN` | *(unset)* | Token clients must send. When set, calls without it are rejected with `UNAUTHENTICATED`. When unset, authentication is disabled and a warning is logged. |
 | `BINARY_PATH_PREFIX` | `/usr/lib/jellyfin-ffmpeg/` | Directory containing the binaries. Only `ffmpeg`, `ffprobe`, `mediainfo` and `vainfo` can be run. |
 | `MAX_FFMPEG_WORKERS` | `10` | Maximum number of concurrent `ffmpeg` processes (`0` = unlimited). Further `ffmpeg` calls wait for a free slot. `ffprobe`, `mediainfo` and `vainfo` are never limited, so library scans are not held up. |
+| `CUDA_DEVICES` | *(unset)* | NVIDIA GPUs to spread transcodes over, as indexes or UUIDs (`0,1`), or `auto` for all GPUs `nvidia-smi` lists. Jellyfin always uses CUDA device 0 (`-init_hw_device cuda=cu:0`), so on a worker with several GPUs every transcode would run on the first one. With this set, each command that uses CUDA gets the GPU running the fewest such commands, through `CUDA_VISIBLE_DEVICES`; other commands are unchanged. Raise `MAX_FFMPEG_WORKERS` to match the number of GPUs. |
 | `FFMPEG_QUEUE_TIMEOUT` | `0` | Seconds an `ffmpeg` call may wait for a slot before it is rejected (`0` = wait indefinitely). Clients retry rejected calls on a new connection, so behind a load balancer the retry can reach a less busy worker. |
 | `USE_SSL` | `false` | Serve gRPC over TLS. |
 | `SSL_CERT_PATH` | `server.crt` | TLS certificate (chain). |
@@ -220,6 +222,7 @@ The worker serves the following on `HTTP_PORT`:
 | `ffmpeg_process_count` | Running `ffmpeg` processes |
 | `ffmpeg_queued_count` | `ffmpeg` calls waiting for a free slot |
 | `ffmpeg_max_workers` | Configured `MAX_FFMPEG_WORKERS` |
+| `ffmpeg_gpu_process_count{device}` | Running CUDA commands per GPU (with `CUDA_DEVICES`) |
 | `ffmpeg_rejected_commands_total` | Calls rejected after `FFMPEG_QUEUE_TIMEOUT` |
 | `ffmpeg_commands_total`, `ffprobe_commands_total`, `mediainfo_commands_total`, `vainfo_commands_total` | Commands run, per binary |
 
