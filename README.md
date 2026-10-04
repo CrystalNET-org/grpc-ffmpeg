@@ -187,6 +187,7 @@ file. Environment variables with the same names override the file.
 | `RETRIES` | `5` | Attempts while no worker is reachable or all are busy, waiting 1, 2, 4 and then 5 seconds between them. Lower it when using `FALLBACK_DIR` so the fallback kicks in quickly. |
 | `CONNECT_TIMEOUT` | `10` | Seconds to wait for a connection per attempt. |
 | `LOG_FILE` | *(unset)* | Activity log: one line per command with its exit code and duration, the client's own messages (retries, authentication errors, fallback), and the last lines of ffmpeg's stderr for failed commands. Useful because callers like Jellyfin often discard ffmpeg's stderr. A regular file is appended to and rotated at 1 MB. A named pipe (FIFO) is written without blocking, so nothing touches the disk and lines are dropped while nobody reads it. |
+| `CLASS_ADDRESSES` | *(unset)* | **Experimental.** Worker pools per hardware class, e.g. `nvidia=workers-nvidia:50051;intel=workers-intel:50051`. Each command is classified from its own arguments: `-init_hw_device cuda=…` is `nvidia`; `qsv=…`, or `vaapi=…` with `driver=iHD`/`i965`, is `intel`. It then goes to that class's address. Commands without hardware arguments (probes, software transcodes, AMD VAAPI), and classes without an entry, go to `GRPC_HOST`. Retries, the fallback and the activity log work per address; log lines show the class as `run [nvidia host:port]: …`. Set by the Jellyfin plugin's hardware classes. |
 
 ## Behaviour
 
