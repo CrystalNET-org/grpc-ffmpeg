@@ -5,11 +5,13 @@ import hmac
 import logging
 import os
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
 import sys
 import tempfile
+from functools import lru_cache
 
 import grpc
 from aiohttp import web
@@ -49,14 +51,17 @@ ALLOWED_BINARIES = [
     "mediainfo",
     "vainfo",
 ]
+# Directory of the allowed binaries; those not in it (e.g. mediainfo, which is
+# not part of jellyfin-ffmpeg) are looked up in PATH
 BINARY_PATH_PREFIX = os.getenv("BINARY_PATH_PREFIX", "/usr/lib/jellyfin-ffmpeg/")
 SSL_KEY_PATH = os.getenv("SSL_KEY_PATH", "server.key")
 SSL_CERT_PATH = os.getenv("SSL_CERT_PATH", "server.crt")
 USE_SSL = os.getenv("USE_SSL", "false").lower() == "true"
 GRPC_PORT = env_int("GRPC_PORT", 50051)
 HTTP_PORT = env_int("HTTP_PORT", 8080)
-# Max concurrent ffmpeg processes (ffprobe etc. are not limited); further
-# ffmpeg calls wait for a free slot. 0 disables the limit.
+# Max concurrent ffmpeg processes with an input (transcodes, extractions;
+# ffprobe and queries such as -version or -encoders are not limited); further
+# ones wait for a free slot. 0 disables the limit.
 MAX_FFMPEG_WORKERS = env_int("MAX_FFMPEG_WORKERS", 10)
 # Seconds an ffmpeg call may wait for a slot before it is rejected with
 # RESOURCE_EXHAUSTED (clients then retry, possibly on another worker).
@@ -140,6 +145,24 @@ gpu_process_gauge = Gauge(
     "Number of running CUDA commands per GPU (with CUDA_DEVICES)",
     ["device"],
 )
+
+
+@lru_cache(maxsize=None)
+def binary_path(binary):
+    """Path of an allowed binary: in BINARY_PATH_PREFIX, else from PATH."""
+    path = os.path.join(BINARY_PATH_PREFIX, binary)
+    if not os.path.exists(path):
+        found = shutil.which(binary)
+        if found:
+            return found
+    return path
+
+
+def needs_slot(binary, tokens):
+    """Whether a command takes an ffmpeg slot: ffmpeg with an input. Queries
+    like -version or -hwaccels finish right away, and making them wait behind
+    running transcodes would e.g. delay Jellyfin's startup checks."""
+    return binary == "ffmpeg" and "-i" in tokens
 
 
 def uses_cuda(tokens):
@@ -390,12 +413,12 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
             return
 
         binary = tokens[0]
-        tokens[0] = os.path.join(BINARY_PATH_PREFIX, binary)
+        tokens[0] = binary_path(binary)
         logger.info(f"Received command: {shlex.join(tokens)}")
         binary_counters[binary].inc()
 
         is_ffmpeg = binary == "ffmpeg"
-        holds_slot = is_ffmpeg and await acquire_ffmpeg_slot(context)
+        holds_slot = needs_slot(binary, tokens) and await acquire_ffmpeg_slot(context)
         if is_ffmpeg:
             ffmpeg_process_gauge.inc()
         gpu = gpu_assigner.acquire() if uses_cuda(tokens) else None
@@ -431,6 +454,11 @@ class FFmpegService(ffmpeg_pb2_grpc.FFmpegServiceServicer):
                     ffmpeg_pb2.CommandResponse(exit_code=127, stream="exit_code")
                 )
                 return
+
+            # Tells the client the command runs here, before any output: from now
+            # on it must not run the command again elsewhere (older clients
+            # ignore this message, as they do any without output or exit code)
+            await context.write(ffmpeg_pb2.CommandResponse(stream="started"))
 
             # Read stdout and stderr concurrently: reading them one after the
             # other deadlocks once the unread pipe fills up, and would delay
@@ -499,7 +527,7 @@ class HealthChecker:
     async def check(self):
         # Run mediainfo on health check file
         returncode, media_info = await self.run_command(
-            ["mediainfo", HEALTHCHECK_FILE]
+            [binary_path("mediainfo"), HEALTHCHECK_FILE]
         )
         if returncode != 0 or "Video" not in media_info:
             logger.error(f"MediaInfo failed for {HEALTHCHECK_FILE}")
@@ -513,7 +541,7 @@ class HealthChecker:
         # Run ffmpeg conversion test
         returncode, _ = await self.run_command(
             [
-                os.path.join(BINARY_PATH_PREFIX, "ffmpeg"),
+                binary_path("ffmpeg"),
                 "-nostdin",
                 "-hide_banner",
                 "-loglevel", "error",
@@ -563,13 +591,26 @@ class HealthChecker:
         return any(track.track_type == "Video" for track in media_info.tracks)
 
 
+def listen_host():
+    """Address to listen on: IPv6 and IPv4 ("[::]") where the host has IPv6,
+    otherwise IPv4 only ("0.0.0.0"), as on most Kubernetes clusters."""
+    if not socket.has_ipv6:
+        return "0.0.0.0"
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::", 0))
+    except OSError:
+        return "0.0.0.0"
+    return "[::]"
+
+
 async def start_grpc_server():
     server = grpc.aio.server(options=GRPC_SERVER_OPTIONS)
     ffmpeg_pb2_grpc.add_FFmpegServiceServicer_to_server(FFmpegService(), server)
 
     ffmpeg_max_workers_gauge.set(MAX_FFMPEG_WORKERS)
 
-    listen_addr = f"0.0.0.0:{GRPC_PORT}"
+    listen_addr = f"{listen_host()}:{GRPC_PORT}"
     if USE_SSL:
         with open(SSL_CERT_PATH, "rb") as f:
             certificate_chain = f.read()
@@ -585,7 +626,10 @@ async def start_grpc_server():
     if VALID_TOKEN:
         logger.info("Token authentication enabled")
     else:
-        logger.warning("VALID_TOKEN is not set, token authentication is disabled")
+        logger.warning(
+            f"VALID_TOKEN is not set: anyone who can reach port {GRPC_PORT} can run ffmpeg "
+            "with this worker's access to files. Set VALID_TOKEN to require a token."
+        )
 
     await server.start()
     return server

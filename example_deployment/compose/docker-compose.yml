@@ -1,20 +1,41 @@
+# A worker built from this repository, for development; for production use the
+# published image (ghcr.io/crystalnet-org/ffmpeg-worker:<release>) instead of build.
 services:
-  grpc-server:
-    image: grpc-ffmpeg-server:latest
+  ffmpeg-worker:
+    image: ffmpeg-worker:local
     build:
-      context: ../.. # Go up two directories to the project root
+      context: ../..
       dockerfile: docker/Dockerfile.server
-    container_name: grpc_ffmpeg_server
     ports:
       - "50051:50051"  # gRPC
       - "8080:8080"    # /health and /metrics
+    # Jellyfin's user, so both can work with each other's files
+    user: "1000:1000"
+    # The host's render group (owner of /dev/dri/renderD*), for the GPU
+    group_add:
+      - "${RENDER_GID:-109}"
+    devices:
+      - /dev/dri:/dev/dri
     environment:
-      - VALID_TOKEN=your_auth_token_here
-      # To enable TLS:
-      # - USE_SSL=true
-      # - SSL_CERT_PATH=/certs/server.crt
-      # - SSL_KEY_PATH=/certs/server.key
+      # Required: without it, anyone who can reach the port can run ffmpeg
+      VALID_TOKEN: change-me
+      MAX_FFMPEG_WORKERS: "4"
+      # TLS:
+      # USE_SSL: "true"
+      # SSL_CERT_PATH: /certs/server.crt
+      # SSL_KEY_PATH: /certs/server.key
     volumes:
-      - ./data:/app/data           # Example: Map local data directory to the container
-      - ./certs:/certs             # SSL certificates if needed
-    restart: always
+      # The same paths as in Jellyfin: media, transcode (cache) and temp directories
+      - /srv/media:/media
+      - /srv/jellyfin/cache:/cache
+      - /srv/jellyfin/tmp:/tmp/jellyfin
+      # - ./certs:/certs:ro
+    restart: unless-stopped
+    # NVIDIA instead of /dev/dri (needs the NVIDIA container toolkit):
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu, video, compute, utility]

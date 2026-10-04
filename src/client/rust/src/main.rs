@@ -397,12 +397,21 @@ fn retry_delay(attempt: u32) -> Duration {
     (Duration::from_secs(1) * 2u32.saturating_pow(attempt)).min(MAX_RETRY_DELAY)
 }
 
+/// The host as written in a URI: IPv6 addresses in brackets.
+fn uri_host(host: &str) -> String {
+    if host.contains(':') && !host.starts_with('[') {
+        format!("[{}]", host)
+    } else {
+        host.to_string()
+    }
+}
+
 /// Builds a lazily connecting channel. Connection failures surface as
 /// `Unavailable` on the first call, which lets the retry loop handle a server
 /// that is not up yet.
 async fn build_channel(config: &Config) -> Result<Channel, anyhow::Error> {
     let scheme = if config.use_ssl { "https" } else { "http" };
-    let target_uri: Uri = format!("{}://{}:{}", scheme, config.host, config.port).parse()?;
+    let target_uri: Uri = format!("{}://{}:{}", scheme, uri_host(&config.host), config.port).parse()?;
 
     let mut endpoint = Channel::builder(target_uri)
         .connect_timeout(config.connect_timeout)
@@ -419,7 +428,7 @@ async fn build_channel(config: &Config) -> Result<Channel, anyhow::Error> {
             .map_err(|e| anyhow::anyhow!("Failed to read certificate {}: {}", cert_path, e))?;
         let tls_config = ClientTlsConfig::new()
             .ca_certificate(Certificate::from_pem(pem))
-            .domain_name(config.host.clone());
+            .domain_name(config.host.trim_start_matches('[').trim_end_matches(']'));
         endpoint = endpoint.tls_config(tls_config)?;
     }
 
@@ -540,7 +549,8 @@ async fn run_command(args: Vec<String>, config: &Config) -> Result<Outcome, anyh
             Ok(response) => {
                 let mut stream = response.into_inner();
                 match stream.message().await {
-                    // The command has started; from here on errors are final.
+                    // The command has started (newer servers say so right away, with a
+                    // "started" message); from here on errors are final.
                     Ok(Some(first)) => {
                         let _ = std::fs::remove_file(&marker);
                         return stream_output(first, &mut stream).await.map(Outcome::Exited);
@@ -740,7 +750,7 @@ async fn main() {
         log_activity(&format!(
             "run [{} {}:{}]: {}",
             class.unwrap_or("default"),
-            config.host,
+            uri_host(&config.host),
             config.port,
             preview(&full_command)
         ));
@@ -791,7 +801,7 @@ fn exit_by_signal(signal: i32) -> ! {
 #[cfg(test)]
 mod tests {
     use super::{
-        hardware_class, parse_class_addresses, parse_config, retry_delay, shell_quote, MAX_RETRY_DELAY,
+        hardware_class, parse_class_addresses, parse_config, retry_delay, shell_quote, uri_host, MAX_RETRY_DELAY,
     };
     use std::time::Duration;
 
@@ -852,6 +862,19 @@ mod tests {
         assert_eq!(map["amd"], ("fd00::1".to_string(), "7000".to_string()));
         assert_eq!(map["v6"], ("::1".to_string(), "50051".to_string()));
         assert_eq!(map.len(), 4);
+    }
+
+    #[test]
+    fn brackets_ipv6_hosts_in_uris() {
+        assert_eq!(uri_host("workers"), "workers");
+        assert_eq!(uri_host("10.0.0.1"), "10.0.0.1");
+        assert_eq!(uri_host("fd00::1"), "[fd00::1]");
+        assert_eq!(uri_host("[fd00::1]"), "[fd00::1]");
+        // What build_channel parses, for every address CLASS_ADDRESSES accepts
+        for (host, port) in parse_class_addresses("a=[fd00::1]:7000;b=[::1];c=workers:50052", "50051").into_values() {
+            let uri = format!("http://{}:{}", uri_host(&host), port);
+            assert!(uri.parse::<tonic::transport::Uri>().is_ok(), "{}", uri);
+        }
     }
 
     #[test]

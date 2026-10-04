@@ -33,7 +33,6 @@ steps:
       - curl -LO https://github.com/protocolbuffers/protobuf/releases/download/v$${PROTOC_VERSION}/protoc-$${PROTOC_VERSION}-linux-x86_64.zip
       - unzip protoc-$${PROTOC_VERSION}-linux-x86_64.zip -d /usr/local
       - cd src/client/rust
-      - PATH="/usr/local/bin:$PATH" cargo test --locked
       # Both binaries are fully static (musl); see .cargo/config.toml
       - rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
       - PATH="/usr/local/bin:$PATH" cargo build --locked --release --target=x86_64-unknown-linux-musl

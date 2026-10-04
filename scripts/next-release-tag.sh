@@ -1,6 +1,7 @@
 #!/bin/sh
-# Prints the tag for releasing the current commit if the bundled jellyfin-ffmpeg
-# version differs from the one in the latest release, and nothing otherwise.
+# Prints the tag for releasing the current commit if what is shipped changed
+# since the latest release: the bundled jellyfin-ffmpeg version, or the worker,
+# client or protocol (the paths below). Prints nothing otherwise.
 #
 # Release tags are <upstream jellyfin-ffmpeg version>-<our version>, e.g.
 # 7.1.4-7.5 for jellyfin-ffmpeg 7.1.4-3. Our version is <major>.<minor> and
@@ -8,6 +9,8 @@
 set -eu
 
 dockerfile=docker/Dockerfile.server
+# What the worker image and the client binaries are built from
+shipped="docker src/server src/client src/proto requirements.txt"
 ffmpeg_version() { sed -n 's/^ARG JELLYFIN_FFMPEG_VERSION=//p'; }
 
 current=$(ffmpeg_version < "$dockerfile")
@@ -27,8 +30,13 @@ latest=$(git tag -l \
 if [ -z "$latest" ]; then
     next="${current%%.*}.1"
 else
+    if ! git cat-file -e "$latest^{commit}" 2>/dev/null; then
+        echo "The commit of $latest is missing; fetch the tags first" >&2
+        exit 1
+    fi
     released=$(git show "$latest:$dockerfile" 2>/dev/null | ffmpeg_version || true)
-    if [ "$current" = "$released" ]; then
+    # shellcheck disable=SC2086 # one argument per path
+    if [ "$current" = "$released" ] && git diff --quiet "$latest" HEAD -- $shipped; then
         exit 0
     fi
     ours=${latest#*-}

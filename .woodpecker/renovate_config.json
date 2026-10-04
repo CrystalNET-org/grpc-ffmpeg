@@ -1,3 +1,8 @@
 {
-    "repositories": ["CrystalNET-org/grpc-ffmpeg"]
+    "repositories": [
+        "CrystalNET-org/grpc-ffmpeg"
+    ],
+    "allowedCommands": [
+        "^sh scripts/update-ffmpeg-checksum\\.sh$"
+    ]
 }
