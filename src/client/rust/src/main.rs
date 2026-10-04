@@ -28,6 +28,11 @@
 //!   command with its exit code, the client's own messages, and the end of
 //!   ffmpeg's stderr for failed commands (default: none). A FIFO is written
 //!   without blocking; lines are dropped while nobody reads it.
+//! - `CLASS_ADDRESSES` (experimental): worker pools per hardware class, e.g.
+//!   `nvidia=workers-nvidia:50051;intel=workers-intel:50051`. Each command is
+//!   classified from its own arguments (see [`hardware_class`]) and sent to its
+//!   class's address; commands without hardware arguments, or of a class
+//!   without an entry, go to `GRPC_HOST`/`GRPC_PORT` (default: none).
 
 use futures_util::stream::{self, Stream, StreamExt};
 use std::collections::HashMap;
@@ -212,6 +217,8 @@ struct Config {
     log_file: Option<PathBuf>,
     retries: u32,
     connect_timeout: Duration,
+    /// Worker address (host, port) per hardware class, see `CLASS_ADDRESSES`.
+    class_addresses: HashMap<String, (String, String)>,
 }
 
 impl Config {
@@ -229,9 +236,13 @@ impl Config {
                 .filter(|value| !value.is_empty())
         };
         let get_or = |key: &str, default: &str| get(key).unwrap_or_else(|| default.to_string());
+        let port = get_or("GRPC_PORT", "50051");
         Config {
             host: get_or("GRPC_HOST", "ffmpeg-workers"),
-            port: get_or("GRPC_PORT", "50051"),
+            class_addresses: get("CLASS_ADDRESSES")
+                .map(|value| parse_class_addresses(&value, &port))
+                .unwrap_or_default(),
+            port,
             use_ssl: get_or("USE_SSL", "false").eq_ignore_ascii_case("true"),
             certificate_path: get_or("CERTIFICATE_PATH", "server.crt"),
             auth_token_set: get("AUTH_TOKEN").is_some(),
@@ -283,6 +294,73 @@ fn parse_config(text: &str) -> HashMap<String, String> {
             (key.trim().to_string(), unquoted.to_string())
         })
         .collect()
+}
+
+/// Parses `CLASS_ADDRESSES`: `class=host[:port]` entries separated by `;` (or
+/// `,`). Class names are case-insensitive; a missing port means `default_port`.
+/// Malformed entries are skipped.
+fn parse_class_addresses(value: &str, default_port: &str) -> HashMap<String, (String, String)> {
+    value
+        .split([';', ','])
+        .filter_map(|entry| entry.split_once('='))
+        .filter_map(|(class, address)| {
+            let (class, address) = (class.trim().to_ascii_lowercase(), address.trim());
+            // "[::1]:50051", "[::1]", "host:50051", "host"
+            let (host, port) = match address.rsplit_once(':') {
+                Some((host, port))
+                    if !port.is_empty()
+                        && port.chars().all(|c| c.is_ascii_digit())
+                        && (!host.contains(':') || host.ends_with(']')) =>
+                {
+                    (host, port)
+                }
+                _ => (address, default_port),
+            };
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            (!class.is_empty() && !host.is_empty()).then(|| (class, (host.to_string(), port.to_string())))
+        })
+        .collect()
+}
+
+/// The hardware class a command needs, from the devices it initializes:
+/// `-init_hw_device cuda=…` is "nvidia"; `qsv=…`, or `vaapi=…` with an Intel
+/// driver (`driver=iHD`/`i965`, as Jellyfin derives QSV from VAAPI on Linux), is
+/// "intel". Without a hardware device, an `*_nvenc`/`*_qsv` encoder decides.
+/// Anything else (software commands, probes, AMD VAAPI) has no class.
+fn hardware_class(args: &[String]) -> Option<&'static str> {
+    let mut class = None;
+    for pair in args.windows(2) {
+        if pair[0] != "-init_hw_device" {
+            continue;
+        }
+        let (kind, options) = pair[1].split_once('=').unwrap_or((pair[1].as_str(), ""));
+        match kind {
+            // The CUDA device is what needs the NVIDIA GPU, whatever else is set up
+            "cuda" => return Some("nvidia"),
+            "qsv" => class = Some("intel"),
+            "vaapi" if options.contains("driver=iHD") || options.contains("driver=i965") => {
+                class = Some("intel")
+            }
+            _ => {}
+        }
+    }
+    class.or_else(|| {
+        let is_codec_option = |option: &str| {
+            option == "-c" || option == "-vcodec" || option.starts_with("-c:") || option.starts_with("-codec")
+        };
+        args.windows(2).find_map(|pair| {
+            let (option, arg) = (&pair[0], &pair[1]);
+            if !is_codec_option(option) {
+                None
+            } else if arg.ends_with("_nvenc") || arg.ends_with("_cuvid") {
+                Some("nvidia")
+            } else if arg.ends_with("_qsv") {
+                Some("intel")
+            } else {
+                None
+            }
+        })
+    })
 }
 
 /// Quotes an argument for a POSIX shell, identical to Python's `shlex.quote`,
@@ -630,7 +708,7 @@ async fn main() {
     let mut argv = env::args_os().map(|a| a.to_string_lossy().into_owned());
     let argv0 = argv.next().unwrap_or_default();
 
-    let config = Config::load(Path::new(&argv0));
+    let mut config = Config::load(Path::new(&argv0));
 
     // BusyBox-like command detection: the name the client is invoked as
     // (e.g. a symlink named "ffmpeg" or "ffprobe") is the remote binary.
@@ -649,7 +727,24 @@ async fn main() {
         path,
         prefix: format!("[{}] {}", std::process::id(), command_from_exe),
     }));
-    log_activity(&format!("run: {}", preview(&full_command)));
+    // Route to the worker pool of the command's hardware class, if one is set.
+    // Retries, the unreachable marker and the fallback then apply to that address.
+    let class = hardware_class(&args);
+    if let Some((host, port)) = class.and_then(|class| config.class_addresses.get(class)).cloned() {
+        config.host = host;
+        config.port = port;
+    }
+    if config.class_addresses.is_empty() {
+        log_activity(&format!("run: {}", preview(&full_command)));
+    } else {
+        log_activity(&format!(
+            "run [{} {}:{}]: {}",
+            class.unwrap_or("default"),
+            config.host,
+            config.port,
+            preview(&full_command)
+        ));
+    }
     let started = Instant::now();
 
     // Execute the remote command and exit with the received exit code.
@@ -695,8 +790,69 @@ fn exit_by_signal(signal: i32) -> ! {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_config, retry_delay, shell_quote, MAX_RETRY_DELAY};
+    use super::{
+        hardware_class, parse_class_addresses, parse_config, retry_delay, shell_quote, MAX_RETRY_DELAY,
+    };
     use std::time::Duration;
+
+    fn argv(line: &str) -> Vec<String> {
+        line.split_whitespace().map(String::from).collect()
+    }
+
+    #[test]
+    fn classifies_jellyfin_nvenc_commands() {
+        // EncodingHelper.GetCudaDeviceArgs + GetFilterHwDeviceArgs
+        let args = argv("-analyzeduration 200M -init_hw_device cuda=cu:0 -filter_hw_device cu -hwaccel cuda -hwaccel_output_format cuda -i file:/media/a.mkv -c:v h264_nvenc out.m3u8");
+        assert_eq!(hardware_class(&args), Some("nvidia"));
+        // CUDA next to a Vulkan device (tonemapping) is still NVIDIA
+        let args = argv("-init_hw_device cuda=cu:0 -init_hw_device vulkan=vk@cu -i a.mkv");
+        assert_eq!(hardware_class(&args), Some("nvidia"));
+    }
+
+    #[test]
+    fn classifies_jellyfin_qsv_commands() {
+        // EncodingHelper.GetQsvDeviceArgs on Linux, with and without the render node
+        let args = argv("-init_hw_device vaapi=va:/dev/dri/renderD128,driver=iHD -init_hw_device qsv=qs@va -filter_hw_device qs -hwaccel vaapi -i a.mkv -c:v h264_qsv out.m3u8");
+        assert_eq!(hardware_class(&args), Some("intel"));
+        let args = argv("-init_hw_device vaapi=va:,vendor_id=0x8086,driver=iHD -init_hw_device qsv=qs@va -i a.mkv");
+        assert_eq!(hardware_class(&args), Some("intel"));
+        // Intel VAAPI with an explicit Intel driver
+        let args = argv("-init_hw_device vaapi=va:/dev/dri/renderD128,driver=i965 -i a.mkv -c:v h264_vaapi o.ts");
+        assert_eq!(hardware_class(&args), Some("intel"));
+    }
+
+    #[test]
+    fn leaves_other_commands_unclassified() {
+        // Probes, software transcodes and AMD VAAPI (no driver= given) go to the default address
+        assert_eq!(hardware_class(&argv("-version")), None);
+        assert_eq!(hardware_class(&argv("-hide_banner -encoders")), None);
+        assert_eq!(hardware_class(&argv("-i file:/media/a_qsv.mkv -c:v libx264 out.mp4")), None);
+        assert_eq!(
+            hardware_class(&argv("-init_hw_device vaapi=va:/dev/dri/renderD128 -i a.mkv -c:v h264_vaapi o.ts")),
+            None
+        );
+        assert_eq!(hardware_class(&argv("-init_hw_device")), None);
+    }
+
+    #[test]
+    fn classifies_by_encoder_without_device() {
+        assert_eq!(hardware_class(&argv("-i a.mkv -c:v hevc_nvenc o.mp4")), Some("nvidia"));
+        assert_eq!(hardware_class(&argv("-c:v h264_cuvid -i a.mkv o.mp4")), Some("nvidia"));
+        assert_eq!(hardware_class(&argv("-i a.mkv -vcodec mjpeg_qsv o.jpg")), Some("intel"));
+    }
+
+    #[test]
+    fn parses_class_addresses() {
+        let map = parse_class_addresses(
+            " NVIDIA = workers-nvidia:50052 ; intel=workers-intel,amd=[fd00::1]:7000;v6=[::1];broken;=x:1;empty=",
+            "50051",
+        );
+        assert_eq!(map["nvidia"], ("workers-nvidia".to_string(), "50052".to_string()));
+        assert_eq!(map["intel"], ("workers-intel".to_string(), "50051".to_string()));
+        assert_eq!(map["amd"], ("fd00::1".to_string(), "7000".to_string()));
+        assert_eq!(map["v6"], ("::1".to_string(), "50051".to_string()));
+        assert_eq!(map.len(), 4);
+    }
 
     #[test]
     fn retry_delay_doubles_up_to_the_maximum() {

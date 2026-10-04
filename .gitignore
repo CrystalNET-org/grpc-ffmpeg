@@ -1,3 +1,7 @@
 # Rust
 /src/client/rust/target/
 **/*.rs.bk
+
+# Python
+__pycache__/
+/gen/

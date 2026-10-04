@@ -14,7 +14,7 @@ when:
 
 steps:
   - name: tag-release
-    image: alpine/git:v2.54.0
+    image: harbor.crystalnet.org/dockerhub-proxy/alpine/git:v2.54.0
     environment:
       GITHUB_TOKEN:
         from_secret: GITHUB_TOKEN
