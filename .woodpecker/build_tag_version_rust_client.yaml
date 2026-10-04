@@ -1,6 +1,6 @@
 steps:
   - name: build_binaries
-    image: rust:1.99
+    image: harbor.crystalnet.org/dockerhub-proxy/library/rust:1.99
     environment:
       # renovate: datasource=github-releases depName=protocolbuffers/protobuf extractVersion=^v(?<version>.*)$
       PROTOC_VERSION: "36.2"
@@ -43,7 +43,7 @@ steps:
       - ls -l ../../grpc-ffmpeg-client-amd64 ../../grpc-ffmpeg-client-arm64 ../../grpc-ffmpeg-client-windows-amd64.exe
 
   - name: publish_release
-    image: woodpeckerci/plugin-release:0.3.2
+    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-release:0.3.2
     settings:
       files:
         - 'src/grpc-ffmpeg-client-amd64'

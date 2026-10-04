@@ -5,7 +5,7 @@ when:
 
 steps:
   docker-build-test:
-    image: woodpeckerci/plugin-docker-buildx:6.1.2
+    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-docker-buildx:6.1.2
     settings:
       repo: ffmpeg-worker-test
       dockerfile: docker/Dockerfile.server
