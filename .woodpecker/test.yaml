@@ -37,7 +37,7 @@ steps:
 
   - name: worker
     # The Python of the worker image (Debian trixie)
-    image: harbor.crystalnet.org/dockerhub-proxy/library/python:3.13-slim
+    image: harbor.crystalnet.org/dockerhub-proxy/library/python:3.14-slim
     backend_options:
       kubernetes:
         resources:
