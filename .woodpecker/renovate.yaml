@@ -1,6 +1,6 @@
 clone:
   git:
-    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-git:2.10.1
+    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-git:2.11.0
     settings:
       partial: false
       depth: 1
