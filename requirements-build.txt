@@ -1,2 +1,2 @@
 # Only needed to generate the Python gRPC stubs from src/proto/ffmpeg.proto.
-grpcio-tools==1.84.0
+grpcio-tools==1.84.1
