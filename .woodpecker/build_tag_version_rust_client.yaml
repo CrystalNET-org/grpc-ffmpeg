@@ -51,7 +51,7 @@ steps:
       - ls -l ../../grpc-ffmpeg-client-amd64 ../../grpc-ffmpeg-client-arm64 ../../grpc-ffmpeg-client-windows-amd64.exe
 
   - name: publish_release
-    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-release:0.3.2
+    image: harbor.crystalnet.org/dockerhub-proxy/woodpeckerci/plugin-release:0.3.3
     # Disk the step writes into its own container (not the workspace volume), so the
     # scheduler accounts for it and the kubelet does not evict the step first
     backend_options:
