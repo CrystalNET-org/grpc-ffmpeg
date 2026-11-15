@@ -22,7 +22,7 @@ when:
 
 steps:
   - name: tag-release
-    image: harbor.crystalnet.org/dockerhub-proxy/alpine/git:v2.54.0
+    image: harbor.crystalnet.org/dockerhub-proxy/alpine/git:v2.54.1
     # Disk the step writes into its own container (not the workspace volume), so the
     # scheduler accounts for it and the kubelet does not evict the step first
     backend_options:
